@@ -9,7 +9,9 @@ echo '$table-of-contents$' > tmp/toc.md
     -   [Structure](#structure)
     -   [Markdown tags](#markdown-tags)
         -   [The tags](#the-tags)
+        -   [How LLM should interpret tags](#how-llm-should-interpret-tags)
         -   [How to work with tags](#how-to-work-with-tags)
+    -   [Emacs tags](#emacs-tags)
     -   [File conventions](#file-conventions)
 -   [Project overview](#project-overview)
     -   [Key tools & technologies](#key-tools--technologies)
@@ -83,6 +85,16 @@ More text here (not WIP).
   action from [WIP] parts but they can suggest modifications to the
   [WIP] part itself
 
+## Emacs tags
+
+- The following `txt` block is for emacs not for LLM
+
+```txt
+[Local Variables:]::
+[indent-tabs-mode: nil]::
+[End:]::
+```
+
 ## File conventions
 
 - Files tagged with `[SRC]` are primary working material (read and modify)
@@ -151,6 +163,8 @@ repo/
 
 ## Code generation
 
+[WIP]
+
 ## File Outputs
 
 - **Journal summaries**: `4owner/journal-insights/[journal-name].md`
@@ -188,8 +202,6 @@ docs/
 
 [END WIP]
 
-[START HUMAN]
 [Local Variables:]::
 [indent-tabs-mode: nil]::
 [End:]::
-[END HUMAN]
