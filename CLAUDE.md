@@ -191,15 +191,6 @@ repo/
 - Directives about *how* Claude should work (code style, output format)
 - Quick reference pointers to external docs
 
-**Example modular layout:**
-```
-CLAUDE.md                    # Main directives + overview
-docs/
-├── cte-patterns.md         # DuckDB CTE reference
-├── baj-reference.md        # baj syntax & examples
-├── journal-guide.md        # How to parse the journals
-└── bash-style-guide.md     # Function generation standards
-
 [END WIP]
 
 [Local Variables:]::
