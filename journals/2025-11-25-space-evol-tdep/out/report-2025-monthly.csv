@@ -1,0 +1,11 @@
+appli,total,2025-01,2025-02,2025-03,2025-04,2025-05,2025-06,2025-07,2025-08,2025-09,2025-10,2025-11
+esisdocs-idf,314.0 GiB,14.4 GiB,174.2 GiB,13.1 GiB,13.0 GiB,15.3 GiB,15.0 GiB,18.6 GiB,14.4 GiB,13.2 GiB,15.1 GiB,7.2 GiB
+esisdocs-naq,194.0 GiB,12.6 GiB,12.3 GiB,13.3 GiB,66.8 GiB,10.4 GiB,14.3 GiB,16.2 GiB,10.9 GiB,16.6 GiB,15.7 GiB,4.3 GiB
+esisdoccr-idf,167.6 GiB,4.9 GiB,76.0 GiB,5.1 GiB,24.2 GiB,7.0 GiB,26.1 GiB,4.6 GiB,4.6 GiB,5.6 GiB,6.8 GiB,2.2 GiB
+esisdocs-occ,108.1 GiB,8.0 GiB,9.1 GiB,9.7 GiB,6.7 GiB,12.3 GiB,11.7 GiB,9.6 GiB,6.4 GiB,13.3 GiB,16.6 GiB,4.1 GiB
+esisdoccr-naq,42.7 GiB,3.4 GiB,3.1 GiB,5.2 GiB,11.9 GiB,4.4 GiB,2.8 GiB,2.2 GiB,1.9 GiB,2.5 GiB,3.5 GiB,1.3 GiB
+esisdoccr-occ,36.9 GiB,3.2 GiB,2.8 GiB,3.6 GiB,5.2 GiB,4.5 GiB,4.0 GiB,2.9 GiB,2.4 GiB,2.9 GiB,3.7 GiB,1.3 GiB
+esisfiles,30.7 GiB,NULL,NULL,NULL,418.4 KiB,5.1 MiB,NULL,2.2 KiB,4.9 KiB,7.7 GiB,12.3 GiB,10.6 GiB
+esisdocs-ges,27.4 GiB,4.1 MiB,1.3 GiB,2.0 GiB,2.2 GiB,2.4 GiB,3.8 GiB,3.8 GiB,2.2 GiB,3.3 GiB,4.4 GiB,1.7 GiB
+esisdoccu,27.3 GiB,1.2 GiB,1.0 GiB,3.1 GiB,1.9 GiB,3.1 GiB,2.4 GiB,3.0 GiB,2.8 GiB,2.5 GiB,4.7 GiB,1.1 GiB
+ TOTAL,949.1 GiB,48.0 GiB,280.2 GiB,55.3 GiB,132.2 GiB,59.6 GiB,80.6 GiB,61.4 GiB,46.0 GiB,68.0 GiB,83.1 GiB,34.2 GiB

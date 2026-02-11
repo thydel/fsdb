@@ -1,0 +1,4 @@
+MAILTO=t.delamare@epiconcept.fr
+MAILFROM=servers@epiconcept.fr
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 * * * * root /usr/bin/bash /usr/local/bin/fsdb-core.sh add-snapshot /data/mysql /space/var

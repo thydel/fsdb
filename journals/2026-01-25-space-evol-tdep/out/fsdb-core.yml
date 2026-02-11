@@ -1,0 +1,87 @@
+- { id: null, ns: fsdb }
+
+- id: files-stat
+  perl: |-
+    BEGIN { $t = time; $j = JSON::PP->new->utf8 }
+    chomp;
+    @s = lstat($_);
+    next unless @s;
+    print $j->encode([$t, $s[9], $s[7], $_]), "\n"
+  sh: |-
+    (cd ${1:?} && find -type f -print0 | perl -MJSON::PP -0 -ne "$perl")
+
+- id: path-to-name
+  jq: |-
+    . / "/" | map(select(length > 0)) | join("-")
+  sh: |-
+    <<< ${1:?} self -Rr
+
+- id: ingest-stat
+  sql: |-
+    CREATE TABLE IF NOT EXISTS fsdb (
+      date TIMESTAMP,
+      mdate TIMESTAMP,
+      size BIGINT,
+      suf VARCHAR,
+      path VARCHAR[]
+    );
+    
+    INSERT INTO fsdb SELECT
+      to_timestamp((js.json->0)::BIGINT),
+      to_timestamp((js.json->1)::BIGINT),
+      (js.json->2)::BIGINT,
+      regexp_extract(js.json->>3, '\.([^./]+)$', 1),
+      list_filter(string_split(js.json->>3, '/'), x -> x != '.')
+    FROM read_json_auto('/dev/stdin') js
+  sh: |-
+    : ${2:?}; files-stat $1 | duckdb $2/$(path-to-name $1).db -c "$sql"
+
+- id: prune-dedup
+  sql: |-
+    DELETE FROM fsdb
+    WHERE rowid IN (
+        SELECT rowid FROM (
+            SELECT
+                rowid,
+                date,
+                size,
+                LAG(size) OVER (PARTITION BY path ORDER BY date) AS prev_size
+            FROM fsdb
+        )
+        WHERE size = prev_size
+          -- CRITICAL: Protect the most recent snapshot regardless of duplication
+          AND date < (SELECT MAX(date) FROM fsdb)
+    )
+  sh: |-
+    : ${2:?}; duckdb $2/$(path-to-name $1).db -c "$sql"
+
+- id: mark-deleted
+  sql: |-
+    INSERT INTO fsdb
+    WITH meta AS (
+      SELECT
+        MAX(date) as curr_t,
+        MAX(date) FILTER (WHERE date < (SELECT MAX(date) FROM fsdb)) as prev_t
+      FROM fsdb
+    ),
+    deleted_paths AS (
+      -- Files present in Previous but missing in Current
+      SELECT path FROM fsdb, meta WHERE date = meta.prev_t
+      EXCEPT
+      SELECT path FROM fsdb, meta WHERE date = meta.curr_t
+    )
+    SELECT
+      meta.curr_t AS date,
+      NULL AS mdate,
+      NULL AS size,  -- The Deletion Marker
+      NULL AS suf,
+      path
+    FROM deleted_paths, meta
+  sh: |-
+    duckdb $2/$(path-to-name $1).db -c "$sql"
+
+- id: add-snapshot
+  sh: |-
+    ingest-stat "$@"
+    prune-dedup "$@"
+    mark-deleted "$@"

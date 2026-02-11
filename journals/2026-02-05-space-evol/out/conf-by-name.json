@@ -1,0 +1,102 @@
+{
+  "prestr1-data-nfsdata": {
+    "node": "prestr1",
+    "dir": "/data/nfsdata",
+    "name": "prestr1-data-nfsdata"
+  },
+  "prostra1-data-nfsdata": {
+    "node": "prostra1",
+    "dir": "/data/nfsdata",
+    "name": "prostra1-data-nfsdata"
+  },
+  "prostrb1-space-nfsdata": {
+    "node": "prostrb1",
+    "dir": "/space/nfsdata",
+    "name": "prostrb1-space-nfsdata"
+  },
+  "prostrb2-data-nfsdata": {
+    "node": "prostrb2",
+    "dir": "/data/nfsdata",
+    "name": "prostrb2-data-nfsdata"
+  },
+  "prostrc1-space-nfsdata": {
+    "node": "prostrc1",
+    "dir": "/space/nfsdata",
+    "name": "prostrc1-space-nfsdata"
+  },
+  "prostrc1-space2-nfsdata": {
+    "node": "prostrc1",
+    "dir": "/space2/nfsdata",
+    "name": "prostrc1-space2-nfsdata"
+  },
+  "prostrd1-space-nfsdata": {
+    "node": "prostrd1",
+    "dir": "/space/nfsdata",
+    "name": "prostrd1-space-nfsdata"
+  },
+  "prostrd1-space2-nfsdata": {
+    "node": "prostrd1",
+    "dir": "/space2/nfsdata",
+    "name": "prostrd1-space2-nfsdata"
+  },
+  "prostre1-space-nfsdata": {
+    "node": "prostre1",
+    "dir": "/space/nfsdata",
+    "name": "prostre1-space-nfsdata"
+  },
+  "prostrf1-space-nfsdata": {
+    "node": "prostrf1",
+    "dir": "/space/nfsdata",
+    "name": "prostrf1-space-nfsdata"
+  },
+  "prostrg1-space-nfsdata": {
+    "node": "prostrg1",
+    "dir": "/space/nfsdata",
+    "name": "prostrg1-space-nfsdata"
+  },
+  "prostrh1-space-nfsdata": {
+    "node": "prostrh1",
+    "dir": "/space/nfsdata",
+    "name": "prostrh1-space-nfsdata"
+  },
+  "prostri1-space-nfsdata": {
+    "node": "prostri1",
+    "dir": "/space/nfsdata",
+    "name": "prostri1-space-nfsdata"
+  },
+  "prostrp1-data-nfsdata": {
+    "node": "prostrp1",
+    "dir": "/data/nfsdata",
+    "name": "prostrp1-data-nfsdata"
+  },
+  "prot1stra1-data-nfsdata": {
+    "node": "prot1stra1",
+    "dir": "/data/nfsdata",
+    "name": "prot1stra1-data-nfsdata"
+  },
+  "prot3stra1-data-nfsdata": {
+    "node": "prot3stra1",
+    "dir": "/data/nfsdata",
+    "name": "prot3stra1-data-nfsdata"
+  },
+  "protpstra1-data-nfsdata": {
+    "node": "protpstra1",
+    "dir": "/data/nfsdata",
+    "name": "protpstra1-data-nfsdata"
+  },
+  "protpstrb1-data-nfsdata": {
+    "node": "protpstrb1",
+    "dir": "/data/nfsdata",
+    "name": "protpstrb1-data-nfsdata"
+  },
+  "protpstrc1-data-nfsdata": {
+    "node": "protpstrc1",
+    "dir": "/data/nfsdata",
+    "name": "protpstrc1-data-nfsdata"
+  },
+  "protpstrd1-data-nfsdata": {
+    "node": "protpstrd1",
+    "dir": "/data/nfsdata",
+    "name": "protpstrd1-data-nfsdata"
+  }
+}

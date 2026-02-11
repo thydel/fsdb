@@ -1,0 +1,52 @@
+---
+
+- data:
+    ssp:
+      path: applisdata/ssp
+      sets: [ apicrypt, upload ]
+      client:
+        node: profnte1
+        base: /space
+      server:
+        node: prostri1
+        base: /space/nfsdata
+    mailmerge:
+      path: applisdata/mailmerge/storage/mailmerge
+      client:
+        node: proepifiles1
+        base: /space
+      server:
+        node: prostrc1
+        base: /space2/nfsdata
+    profntr1-ssp:
+      path: applisdata
+      client:
+        node: profntr1
+        base: /space
+      server:
+        node: prostrg1
+        base: /space/nfsdata
+      
+- jqd: |
+    def applisdata($k):
+      .[$k] | .path as $path
+      | { what: .client | "\(.node):\(.base)/\($path)"
+      , node: .server.node
+      , path: "\(.server.base)/\(.client.node)/\($path)" }
+      | { $k: . };
+    def mailmerge:
+      .mailmerge | .path as $path
+      | { what: .client | "\(.node):\(.base)/\($path)"
+      , node: .server.node
+      , path: "\(.server.base)/\(.client.node)/\($path)" }
+      | { mailmerge: . };
+    def ssp($name):
+      .ssp | .path as $path
+      | { what: .client | "\(.node):\(.base)/\($path)/\($name)"
+      , node: .server.node
+      , path: "\(.server.base)/\(.client.node)/\($path)/\($name)" }
+      | { $name: . };
+    def ssp: [ssp(.ssp.sets[])] | { ssp: add };
+    
+- jqe: |
+    [ mailmerge, ssp, applisdata("profntr1-ssp") ] | add

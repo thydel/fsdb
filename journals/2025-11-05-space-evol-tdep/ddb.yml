@@ -1,0 +1,81 @@
+---
+
+- id:
+  ns: ddb
+  lv: [ jq, sql ]
+
+- id: install-duckdb
+  lv: [ url ]
+  url: |
+    https://github.com/duckdb/duckdb/releases/download/v1.4.1/duckdb_cli-linux-amd64.gz
+  sh: |
+    curl -sL $url | zcat | install /dev/stdin /usr/local/bin/duckdb
+
+- m4:
+    DBD: ${dbd:-tmp}
+
+- id: vacuum
+  sh: |
+    <<< vacuum duckdb DBD/${1:?}-stat.db
+  tt: |-
+    vacuum ssp.apicrypt
+
+- id: show-tables
+  sql: |
+    show tables
+  sh: |
+    <<< "$sql" duckdb "${@:2}" DBD/${1:?}.db
+  tt: |-
+    show-tables budi
+    show-tables esis3d-can
+
+- id: list-tables
+  sh: show-tables ${1:?} -column -noheader
+  tt: list-tables budi
+
+- m4:
+    SQL: |-
+      : ${2:?}; self -nr --arg table ${2} --arg limit ${3:-10} | duckdb "$@" DBD/${1:?}.db
+
+- id: describe-table
+  jq: |
+    "describe table \($table)"
+  sh: SQL
+  tt: |-
+    describe-table budi stat
+
+- id: describe-tables
+  sh: list-tables ${1:?} | map describe-table $1
+  tt: describe-tables budi
+
+- id: summarize-table
+  jq: |
+    "summarize \($table)"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    summarize-table budi stat
+    summarize-table esis3d-can stat
+    dbd=out summarize-table tdep stat
+
+- id: summarize-tables
+  sh: list-tables ${1:?} | map summarize-table $1
+  tt: |-
+    summarize-tables budi
+    summarize-tables mailmerge
+
+- id: table-head
+  jq: |
+    "select * from \($table) limit \($limit)"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    table-head budi stat
+    table-head mailmerge stat
+    fmt=box table-head budi stat 50
+
+- id: table-sample
+  jq: |
+    "select * from \($table) tablesample \($limit) rows"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    table-sample budi stat
+    fmt=box table-sample budi stat 50

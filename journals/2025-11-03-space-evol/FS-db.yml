@@ -1,0 +1,530 @@
+---
+
+- id: install-duckdb
+  ns: dep
+  lv: [ url ]
+  url: |
+    https://github.com/duckdb/duckdb/releases/download/v1.4.1/duckdb_cli-linux-amd64.gz
+  sh: |
+    curl -sL $url | zcat | install /dev/stdin /usr/local/bin/duckdb
+
+---
+
+- m4:
+    ME: fsdb
+    DATA: data.yml
+
+- id:
+  ns: ME
+  lv: [ jq, sql, python, perl ]
+
+# jqsh helpers
+
+- { id: src, sh: ME src }
+- { id: show, sh: fns ME }
+
+- id: tt
+  jq: INDEX(.[]; .id)[$id].tt
+  sh: src | self -r --arg id ${1:?}
+  tt: |-
+    tt size-by-period
+    tt create-files-stat-db
+
+# the lib
+
+- id: metadata
+  sh: < DATA yq .[0].data
+
+- id: data
+  sh: < DATA ejq
+
+- id: fs
+  jq: |
+    path(.. | objects | select(has("what"))) | join(".")
+  sh: |
+    data | self -r
+
+- id: servers
+  jq: |
+    [.. | .node? // empty] | unique[]
+  sh: |
+    data | self -r
+
+- id: var
+  jq: |
+    getpath($var / ".")
+  sh: |
+    < DATA ejq | self -r --arg var ${1:?}
+  tt: |-
+    var mailmerge
+    var mailmerge.node
+    var ssp.upload.path
+
+- m4:
+    SPLIT: |
+      def splitBy($n; $s): inputs / $s | [.[:$n][], (.[$n:] | join($s))] | last |= (. / ",")[0];
+      def splitBy($s): splitBy(1; $s);
+
+- id: stat-args
+  js: { "Y": uts, s: size, f: mode, h: nlinks, u: uid, g: gid, U: uname, G: gname }
+  jq: |
+    . / "" | map("%" + . | if . | test("[fUG]") then @json else . end) | join(",") | "[\(.)]"
+  sh: |
+    <<< ${1:-Ysi} self -Rr --argjson js "$js"
+  tt: |-
+    stat-args YsifhUG
+
+- id: files-stat
+  perl: |
+    BEGIN { $j = JSON::PP->new->utf8 }
+    chomp;
+    @s = lstat($_);
+    next unless @s;
+    print $j->encode([$s[1], $s[2], $_]), "\n"
+  sh: |
+    (cd ${1:?} && find -type f -print0 |
+    if [[ "$2" == imn ]]; then perl -MJSON::PP -0 -ne "$perl"; else xargs -0r stat -c "$(stat-args $2)"; fi)
+  tt: |
+    files-stat /usr/share Ysfihug
+    files-stat /usr/share imn
+    files-stat /usr/share
+
+- id: get-files-stat
+  sh: |
+    : ${1:?}; local a=${2:-Ysi}; with-lib jqsh ME -- files-stat $(var $1.path) $a |
+    ssh $(var $1.node) bash | gzip > tmp/$1-$a-stat.js.gz
+  tt: |-
+    get-files-stat mailmerge
+    get-files-stat ssp.apicrypt YsihUG
+    get-files-stat ssp.apicrypt ihug
+    get-files-stat ssp.apicrypt imn
+    get-files-stat ssp.apicrypt
+    get-files-stat ssp.upload
+
+- m4:
+    NORM: |
+      [(null | { $@ } | keys_unsorted), .] | transpose | map({(first): last}) | add
+
+- id: norm-file-stat
+  jq:
+    Ysi: |
+      NORM(uts, size, inode)
+    imn: |
+      NORM(inode, mode, path)
+    ihug: |
+      NORM(inode, nlinks, uid, gid)
+  sh: |
+    local stat=${2:-Ysi}
+    local what=${1:?}-$stat
+    < tmp/$what-stat.js.gz zcat | jq "${jq[$stat]}" -c
+  tt: |-
+    norm-file-stat ssp.apicrypt Ysi
+    norm-file-stat ssp.apicrypt imn
+    norm-file-stat ssp.apicrypt ihug
+
+- id: install-libmagic-on-a-server
+  sh: |
+    ssh ${1:?} -l root apt install -y libfile-libmagic-perl
+
+- id: install-libmagic-on-all-servers
+  sh: |
+    servers | map install-libmagic-on-server
+    
+- id: install-libmagic
+  sh: |
+    install-libmagic-on-a-server $(var $1.node)
+  sh_: |
+    ssh $(var $1.node) -l root apt install -y libfile-libmagic-perl
+  tt: |-
+    install-libmagic ssp.apicrypt
+    install-libmagic mailmerge
+
+  # require `apt install libfile-libmagic-perl libbsd-resource-perl`
+- id: files-type
+  perl: |
+    BEGIN {
+      $j = JSON::PP->new->utf8;
+      $magic = File::LibMagic->new(follow_symlinks => 1, uncompress => 0);
+      $| = 1;
+    }
+    foreach my $filename (@ARGV) {
+      eval {
+        my $info = $magic->info_from_filename($filename);
+        if ($info) {
+          print $j->encode([$filename, $info->{mime_type}, $info->{encoding}]), "\n";
+        } else {
+          print $j->encode([$filename, undef, undef]), "\n";
+        }
+      };
+      if ($@) {
+        # Capture the error message
+        my $err = "$@";
+        chomp $err;
+        $err =~ s/ at \/usr\/lib.*//;
+        # Clean up error string
+        $err =~ s/, <> chunk \d+.//;
+        print STDERR "Caught fatal error for '$filename': $err\n";
+        print $j->encode([$filename, "ERROR", $err]), "\n";
+      }
+    }
+  perl_: |
+    BEGIN {
+      use BSD::Resource;
+      my $limit = 1.0 * 1024 ** 3;
+      unless (setrlimit(RLIMIT_AS, $limit, $limit)) {
+        die "Could not setrlimit: $!";
+      }
+      $j = JSON::PP->new->utf8;
+      $magic = File::LibMagic->new(follow_symlinks => 1, uncompress => 0);
+      $| = 1;
+      # Initialize counter
+      $i = 0;
+      $REINIT_AT = shift(@ARGV) || 10000;
+    }
+    chomp;
+    my $filename = $_;
+    # Re-initialize every 10,000 files to combat leaks
+    if (++$i % 10000 == 0) {
+      print STDERR "Re-initializing File::LibMagic at $i files (processing: $filename)\n";
+      $magic = File::LibMagic->new(follow_symlinks => 1, uncompress => 0);
+    }
+    eval {
+      my $info = $magic->info_from_filename($filename);
+      if ($info) {
+        print $j->encode([$filename, $info->{mime_type}, $info->{encoding}]), "\n";
+      } else {
+        print $j->encode([$filename, undef, undef]), "\n";
+      }
+    };
+    
+    # Check if the eval block died
+    if ($@) {
+      # Capture the error message
+      my $err = "$@";
+      # This will now also catch "Out of memory!"
+      chomp $err;
+      # Clean up error string
+      $err =~ s/ at \/usr\/lib.*//;
+      $err =~ s/, <> chunk \d+.//;
+      print STDERR "Caught fatal error for '$filename': $err\n";
+      print $j->encode([$filename, "ERROR", $err]), "\n";
+    }
+  sh_: |
+    (cd ${1:?} && find . -type f -print0 | perl -MJSON::PP -MFile::LibMagic -0 -ne "$perl" ${1:-10000})
+  sh: |
+    (cd ${1:?} && find . -type f -print0 | xargs -0r perl -MJSON::PP -MFile::LibMagic -e "$perl")
+  tt: |
+    files-type /usr/share
+    files-type ssp.upload
+
+- id: get-files-type
+  sh: |
+    with-lib jqsh ME -- files-type $(var ${1:?}.path) | ssh $(var $1.node) bash | gzip > tmp/$1-type.js.gz
+  tt: |-
+    get-files-type ssp.apicrypt
+    get-files-type ssp.upload
+
+- id: norm-file-type
+  jq: |
+    NORM(path, type, charset)
+  sh: |
+    < tmp/${1:?}-type.js.gz zcat | self -c
+  tt: |
+    norm-file-type ssp.apicrypt
+
+- id: get-all-data
+  js: [ Ysi, ihug, imn ]
+  jq: |
+    "get-files-stat \($what) \($stat[])", "get-files-type \($what)"
+  sh: |
+    . <(self -nr --arg what ${1:?} --argjson stat "$js")
+  tt: |-
+    get-all-data ssp.upload
+
+- id: add-stat-table
+  js:
+    Ysi: { uts: UBIGINT, size: UBIGINT, inode: UBIGINT }
+    imn: { inode: UBIGINT, mode: USMALLINT, path: VARCHAR }
+    ihug: { inode: UBIGINT, nlinks: USMALLINT, uid: USMALLINT, gid: USMALLINT }
+  jq: |
+    .[$stat] | "CREATE TABLE \($stat) AS select * from read_json('/dev/stdin', columns = \(@json))"
+  sh: |
+    local stat=${2:-Ysi}; local sql=$(<<< "$js" self --arg stat $stat -r)
+    norm-file-stat "$@" | duckdb tmp/${1:?}-stat.db -c "$sql"
+  tt: |-
+    add-table mailmerge
+    add-table ssp.apicrypt Ysi
+    add-table ssp.apicrypt imn
+    add-table ssp.apicrypt ihug
+    add-table ssp.upload
+
+- id: add-file-table
+  js: { path: VARCHAR, type: VARCHAR, charset: VARCHAR }
+  jq: |
+    "CREATE TABLE file AS select * from read_json('/dev/stdin', columns = \(@json))"
+  sh: |
+    norm-file-type ${1:?} | duckdb tmp/$1-stat.db -c "$(<<< "$js" self -r)"
+  tt: |-
+    add-file-table ssp.apicrypt
+
+- id: add-tables
+  jq: |
+    $ARGS.positional[] | "add-stat-table \($base) \(.)"
+  sh: |
+    . <(self -nr --arg base ${1:?} --args Ysi imn ihug)
+    add-file-table $1
+  tt: |
+    add-tables ssp.apicrypt
+    add-tables ssp.upload
+
+- id: join-tables
+  sql: |
+    CREATE TABLE stat AS
+    Select Ysi.inode, uts, size, nlinks, uid, gid, mode, imn.path, type, charset FROM Ysi
+    JOIN imn ON Ysi.inode = imn.inode
+    JOIN ihug ON Ysi.inode = ihug.inode
+    JOIN file ON imn.path = file.path;
+    DROP TABLE Ysi; DROP TABLE imn; DROP table ihug; drop table file;
+    vacuum
+  sh: |
+    <<< "$sql" duckdb tmp/${1:?}-stat.db
+  tt: |-
+    join-tables ssp.apicrypt
+    join-tables ssp.upload
+
+################
+
+- id: vacuum
+  sh: |
+    <<< vacuum duckdb tmp/${1:?}-stat.db
+  tt: |-
+    vacuum ssp.apicrypt
+
+- id: show-tables
+  sql: |
+    show tables
+  sh: |
+    <<< "$sql" duckdb "${@:2}" tmp/${1:?}-stat.db
+  tt: |-
+    show-tables ssp.apicrypt
+    show-tables ssp.upload
+
+- id: list-tables
+  sh: show-tables ${1:?} -column -noheader
+  tt: list-tables ssp.apicrypt
+
+- m4:
+    SQL: |-
+      : ${2:?}; self -nr --arg table ${2} --arg limit ${3:-10} | duckdb "$@" tmp/${1:?}-stat.db
+
+- id: describe-table
+  jq: |
+    "describe table \($table)"
+  sh: SQL
+  tt: |-
+    describe-table ssp.apicrypt stat
+
+- id: describe-tables
+  sh: list-tables ${1:?} | map describe-table $1
+  tt: describe-tables ssp.apicrypt
+
+- id: summarize-table
+  jq: |
+    "summarize \($table)"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    summarize-table ssp.apicrypt stat
+    summarize-table ssp.upload stat
+
+- id: summarize-tables
+  sh: list-tables ${1:?} | map summarize-table $1
+  tt: summarize-tables ssp.apicrypt
+
+- id: table-head
+  jq: |
+    "select * from \($table) limit \($limit)"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    table-head ssp.apicrypt stat
+    fmt=box table-head ssp.apicrypt stat 50
+
+- id: table-sample
+  jq: |
+    "select * from \($table) tablesample \($limit) rows"
+  sh: SQL ${fmt:+-$fmt}
+  tt: |-
+    table-sample ssp.apicrypt stat
+    fmt=box table-sample ssp.apicrypt stat 50
+
+################
+
+- id: size-by-period
+  jq: |
+    "SELECT
+        strftime(to_timestamp(uts), '\($period)') AS period,
+        COUNT(*) AS cnt,
+        ROUND(SUM(size)::DOUBLE / POWER(1024, \($power)), 2) AS size
+    FROM \($table) GROUP BY period ORDER BY period"
+  sh: |
+    self -nr --arg table ${table:-stat} --arg period $period --arg power $power |
+    duckdb tmp/$1-stat.db -${fmt:-markdown}
+  tt: |-
+    period=%Y power=3 size-by-period mailmerge
+    table=Ysi period=%Y power=3 size-by-period mailmerge
+    period=%H power=3 size-by-period mailmerge
+    period=%Y-%m power=2 size-by-period mailmerge
+    period=%Y power=3 size-by-period ssp.apicrypt
+    period=%Y power=3 size-by-period ssp.upload
+
+- id: simple-plot
+  jq: |
+    "SELECT period, \($what),
+    REPEAT('\u2588', (\($what) * \($max) / MAX(\($what)) OVER ())::INTEGER) AS bar
+    FROM read_json('/dev/stdin') ORDER by period"
+  sh: |
+    duckdb -markdown -c "$(self -nr --arg what ${1?} --arg max ${2:-40})"
+  tt: |-
+    period=%Y power=3 fmt=json size-by-period ssp.apicrypt | simple-plot cnt
+    period=%Y-%m power=2 fmt=json size-by-period ssp.apicrypt | simple-plot cnt
+    table=Ysi period=%Y power=3 fmt=json size-by-period mailmerge | simple-plot cnt
+
+- id: plot-size-by-period
+  jq: |
+    "
+    import sys
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    
+    # Read CSV data from standard input
+    df = pd.read_csv(sys.stdin)
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(10, 5.5))
+    
+    # Plot bars for number_of_files
+    ax1.bar(df['period'], df['cnt'], color='skyblue', label='cnt')
+    ax1.set_xlabel('period')
+    ax1.set_ylabel('cnt')
+    ax1.tick_params(axis='y')
+    
+    # Create a second y-axis for the size
+    ax2 = ax1.twinx()
+    ax2.plot(df['period'], df['size'], color='red', marker='o', label='size')
+    ax2.set_ylabel('size')
+    ax2.tick_params(axis='y')
+    
+    # Final Touches
+    plt.title('\($set) by \($period) U=K^\($power)')
+    fig.tight_layout()
+    plt.legend()
+    # Save the output file
+    plt.savefig('\($set)-by-\($period).png')
+    "
+  sh: |
+    local title='Cnt and size added per period'
+    : ${2:?}; size-by-period $1 | python -c "$(self -nRr --arg set $1 --arg period $2 --arg power $power)"
+  tt: |
+    period=%Y power=3 fmt=csv plot-size-by-period mailmerge year
+    period=%H power=3 fmt=csv plot-size-by-period mailmerge hour
+    period=%Y power=3 fmt=csv plot-size-by-period ssp-apicrypt year
+
+- id: cumulative-size-by-period
+  jq: |
+    "
+    WITH period_data AS (
+        -- First, aggregate data per period within the date range
+        SELECT
+            strftime(to_timestamp(uts), '\($period)') AS period,
+            COUNT(*) AS period_cnt,
+            SUM(size) AS period_size
+        FROM stat
+        WHERE to_timestamp(uts) >= strptime('\($start)', '%Y-%m-%d')
+          AND to_timestamp(uts) < (strptime('\($end)', '%Y-%m-%d') + INTERVAL 1 DAY)
+        GROUP BY period
+    )
+    -- Now, calculate the cumulative sum over the periods
+    SELECT
+        period,
+        SUM(period_cnt) OVER (ORDER BY period) AS cnt,
+        ROUND(
+            SUM(period_size) OVER (ORDER BY period)::DOUBLE / POWER(1024, \($power)), 2
+        ) AS size
+    FROM period_data
+    ORDER BY period;
+    "
+  sh: |
+    # $1: dataset (e.g., mailmerge)
+    # env: period (e.g., '%Y-%m'), power (e.g., 3), start (e.g., '2023-01-01'), end (e.g., '2023-12-31')
+    : ${start:?Required}; : ${end:?Required}; : ${period:?Required}; : ${power:?Required}
+    self -nr --arg period "$period" --arg power "$power" --arg start "$start" --arg end "$end" |
+    duckdb tmp/$(printf "%s\n" "$@" | paste -sd-)-stat.db -${fmt:-markdown}
+  tt: |-
+    # Test: Cumulative by month for 2023 (GiB)
+    period=%Y-%m power=3 start=2023-01-01 end=2023-12-31 cumulative-size-by-period mailmerge
+    # Test: Cumulative by week for 2024 (MiB)
+    period=%Y-%W power=2 start=2024-01-01 end=2024-12-31 cumulative-size-by-period mailmerge
+    period=%Y power=3 start=2020-01-01 end=2025-12-31 cumulative-size-by-period mailmerge
+
+- id: plot-cumulative-size
+  jq: |
+    "
+    import sys
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    
+    # Read CSV data from standard input
+    df = pd.read_csv(sys.stdin)
+    
+    # Ensure 'period' is treated as a string for plotting
+    df['period'] = df['period'].astype(str)
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Plot bars for cumulative number_of_files
+    ax1.bar(df['period'], df['cnt'], color='skyblue', label='Cumulative cnt')
+    ax1.set_xlabel('Period (\($period))')
+    ax1.set_ylabel('Cumulative Count (cnt)')
+    ax1.tick_params(axis='y')
+    
+    # Rotate x-axis labels if there are many periods
+    if len(df['period']) > 25:
+        ax1.tick_params(axis='x', rotation=75)
+    
+    # Create a second y-axis for the cumulative size
+    ax2 = ax1.twinx()
+    ax2.plot(df['period'], df['size'], color='red', marker='o', linestyle='-', label='Cumulative size')
+    ax2.set_ylabel('Cumulative Size (U=K^\($power)')
+    ax2.tick_params(axis='y')
+    
+    # Combine legends from both axes
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc='upper left')
+    
+    # Final Touches
+    plt.title('Cumulative Cnt & Size for \($set) (\($start) to \($end))')
+    fig.tight_layout()
+    
+    # Save the output file
+    plt.savefig('\($set)-cumulative-by-\($period_name).png')
+    "
+  sh: |-
+    # $1: dataset (e.g., mailmerge)
+    # $2: period_name (e.g., 'month', 'week' for the output file)
+    # env: period (strftime), power, start, end
+    : ${period:?Required}; : ${power:?Required}; : ${start:?Required}; : ${end:?Required}
+    local period_name=${2:?period_name_required}
+    
+    # Call the new data script, forcing CSV output for python
+    fmt=csv cumulative-size-by-period $1 |
+    python -c "$(self -nRr --arg set $1 --arg period "$period" --arg period_name "$period_name" --arg power "$power" --arg start "$start" --arg end "$end")"
+  tt: |
+    # Test: Plot cumulative by month for 2023
+    period=%Y-%m power=3 start=2023-01-01 end=2023-12-31 plot-cumulative-size mailmerge month
+    # Test: Plot cumulative by week for 2023
+    period=%Y-%W power=3 start=2023-01-01 end=2023-12-31 plot-cumulative-size mailmerge week
+    # Test: Plot cumulative by day for Q1 2024
+    period=%Y-%m-%d power=2 start=2024-01-01 end=2024-03-31 plot-cumulative-size mailmerge day
+    period=%Y-%m power=2 start=2020-01-01 end=2025-12-31 plot-cumulative-size mailmerge 2020-2025-month
+    period=%Y-%m power=2 start=2020-01-01 end=2025-12-31 plot-cumulative-size ssp-apicrypt 2020-2025-month

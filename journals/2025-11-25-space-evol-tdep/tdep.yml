@@ -1,0 +1,265 @@
+---
+
+- m4:
+    ME: tdep
+
+- id:
+  ns: ME
+  lv: [ jq, perl, jsonnet, mk, sql ]
+
+# jqsh helpers
+
+- { id: src, sh: ME src }
+- { id: show, sh: fns ME }
+
+- id: id
+  jq: INDEX(.[]; .id)[$id] | del(.ns, .lv, .tt)
+  sh: src | self -r --arg id ${1:?} | yq -P
+  tt: |-
+    loop id mk-links collect-links process-links
+  
+- id: tt
+  jq: INDEX(.[]; .id)[$id].tt
+  sh: src | self -r --arg id ${1:?}
+  tt: |-
+    tt collect-links
+
+# the lib
+
+- id: conf
+  jsonnet: |
+    {
+      files: {
+        node: "profntd1",
+        applis: "/space/applisdata",
+        splits: "/mnt/links/data/nfsdata/split/applisdata"
+      },
+      dbs: {
+        node: "prot3cbdde1",
+        dirs: "/data/mysql",
+        files: [ self.dirs + "/ibdata" ]
+      }
+    }
+  sh: |
+    jsonnet -e "$jsonnet"
+  tt: |-
+    conf
+
+- id: var
+  jq: |
+    getpath($var / ".")
+  sh: |
+    self -r --arg var ${1:?}
+  tt: |-
+    conf | var files.node
+
+- id: collect-links
+  # Don't keep broken links
+  perl: |
+    chomp; next unless -e $_; my $t = readlink $_; print encode_json([$_, $t]), "\n"
+  sh: |
+    find ${1:?} -maxdepth 1 -type l -print0 | perl -MJSON::PP=encode_json -n -0e "$perl"
+  tt: |-
+    collect-links /space/applisdata
+    with-lib tdep -- collect-links $(conf | var files.applis) | ssh $(conf | var files.node) bash > tmp/files.applis.js
+
+- id: exclude-links
+  jq: |
+    with_entries(select(.key | test($ARGS.positional[]) | not))
+  sh: |
+    self --args "$@"
+  tt: |-
+    exclude [.-]old
+
+- id: fix-links
+  js:
+    e-depistage:
+      bad:
+        client: profntd1,
+        appli: e-depistage,
+        split: split2,
+        node: prostrm1,
+        path: /data/nfsdata/profntd1/applisdata
+      fixed:
+        split: split99
+        node: prostrc1
+        path: /space/nfsdata/shared
+  jq: |
+    reduce ($fixes | keys[]) as $appli (.; .[$appli] |= . + $fixes[$appli].fixed)
+  sh: |
+    self --argjson fixes "$js"
+  tt: |-
+    fix-links 
+
+- m4:
+    APPLIS: appli-split.js
+    MTABLE: stat
+
+- id: applis
+  jq: |
+    keys[]
+  sh: |
+    < out/APPLIS self -r
+
+- id: process-links
+  jq: |
+    def aspath: map(. / "/");
+    def split: aspath | { split: .[0][-1], node: .[1][2], path: .[1][3:] | ("/" + join("/")) };
+    def appli: aspath | { $client } + { appli: .[0][-1], split: .[1][2] };
+    INDEX(JOIN(INDEX($splits[] | split; .split); $applis[] | appli; .split; add); .appli)
+  sh: |
+    : ${2:?}; self -n --slurpfile applis $1 --slurpfile splits $2 --arg client $(conf | var files.node)
+  tt: |-
+    process-links tmp/files.{applis,splits}.js | exclude-links [.-]old | fix-links > tmp/APPLIS
+
+- id: auto
+  sh: mkdir -p tmp; as-lib jqsh ME > tmp/ME.sh
+  
+- m4:
+    MK_HEAD: |
+      MAKEFLAGS += -Rr --warn-undefined-variables
+      SHELL != which bash
+      .SHELLFLAGS := -euo pipefail -c
+      .ONESHELL:
+      .DELETE_ON_ERROR:
+      .PHONY: phony
+      .DEFAULT_GOAL := main
+    MK_DIRS: |
+      tmp ?= tmp
+      out ?= out
+      dirs = $(tmp) $(out)
+      $(dirs):; mkdir -p $(@)
+    MK_APPLIS: |
+      conf := $(out)/APPLIS
+      applis != < $(conf) jq keys[] -r
+      gz := $(tmp)/%.gz
+      db := $(tmp)/%.db
+    MK: |
+      auto; <<< $mk make -f /dev/stdin BASH_ENV=tmp/ME.sh "${@}"
+
+- id: mk-links
+  sh: MK
+  mk: |
+    MK_HEAD«»MK_DIRS«»
+    main := $(out)/APPLIS
+    main: $(main)
+    links := applis splits
+    p := $(tmp)/files.%.js
+    links := $(links:%=$p)
+    $(main): $(links) | $(out); process-links $^ | exclude-links [.-]old | fix-links > $@
+    $(links): $p : | $(tmp); with-lib ME -- collect-links $$(conf | var files.$*) | ssh $$(conf | var files.node) bash > $@
+  tt: |-
+    mk-links
+    mk-links tmp=tmp1 out=out1
+
+- id: stats
+  sh: |
+    (cd $1 && find -type f -print0 | xargs -0r stat -c %Y,%s)
+  tt: |-
+    stats /usr/local/man/
+
+- id: get-stats
+  jq: |
+    .[$appli] | "with-lib jqsh ME -- stats \(.path)/\($appli) | ssh \(.node) bash > tmp/\($appli)"
+  sh: |
+    self -r --arg appli ${1:?}
+  tt: |-
+    < APPLIS get-stats esis3d-ges
+    . <(< APPLIS get-stats esis3d-ges)
+
+- id: mk-stats
+  sh: MK
+  mk: |
+    MK_HEAD«»MK_DIRS«»MK_APPLIS«»
+    main := $(applis:%=$(gz))
+    $(main): $(gz) : | $(tmp); with-lib ME -- stats $$(< $(conf) var $*.path)/$* | ssh $$(< $(conf) var $*.node) -l root bash | gzip > $@
+    main: $(main)
+  tt: |-
+    mk-stats
+    mk-stat stat-docs-naq
+
+- id: add-table
+  js:
+    stat: { uts: UBIGINT, size: UBIGINT }
+  jq: |
+    .[$table] | "create table \($table) as select * from read_csv('/dev/stdin', header = false, columns = \(@json))"
+  sh: |
+    local table=${2:-MTABLE}; local sql=$(<<< "$js" self --arg table $table -r)
+    { echo 0,0; < tmp/${1:?}.gz zcat; } | duckdb tmp/${1:?}.db -c "$sql"
+  tt: |-
+    add-table budi
+    add-table mailmerge
+
+- id: mk-tables
+  sh: MK
+  mk: |
+    MK_HEAD«»MK_DIRS«»MK_APPLIS«»
+    $(db): $(gz) | $(tmp); add-table $* $(table)
+    main: phony $(applis:%=tmp/%.db)
+  tt: |-
+    mk-tables table=STAT
+
+- id: add-cols
+  jq: |
+    .[$appli] | to_entries[] | "ALTER TABLE \($table) ADD COLUMN IF NOT EXISTS \(.key) VARCHAR DEFAULT '\(.value)';"
+  sh: |
+    < out/APPLIS self --arg appli ${1:?} --arg table ${2:-MTABLE} -r | duckdb tmp/$1.db
+  tt: |
+    add-cols budi
+    applis | map add-cols
+
+- id: add-cols-to-all-dbs
+  sh: |
+    applis | map add-cols
+  tt: |-
+    add-cols-to-all-dbs
+
+#- id: merge-all-dbs
+#  jq: |
+#    def select: "'tmp/\(.).db'" as $db | "SELECT * FROM \($db).\($table)";
+#    def union: [inputs] | map(select) | join("\nUNION ALL\n");
+#    "CREATE TABLE \($table) AS ", union + ";"
+#  sh_: |
+#    applis | self -nRr --arg table ${1:-MTABLE}
+#  sh: |
+#    applis | self -nRr --arg table ${1:-MTABLE} | duckdb ${1:-out/tdep.db}
+#  tt: |-
+#    merge-all-dbs
+
+- id: merge-all-dbs
+  jq: |
+    def q: "\"" as $q | $q + . + $q;
+    def attach($i): $i[] | "ATTACH 'tmp/\(.).db' AS \(. | q) (READ_ONLY);";
+    def select: "SELECT * FROM \(. | q).\($table)";
+    def union($i): $i | map(select) | join("\nUNION ALL\n");
+    [inputs] as $i | attach($i), "CREATE TABLE \($table) AS ", union($i) + ";"
+  sh: |
+    applis | self -nRr --arg table ${1:-MTABLE} | duckdb ${1:-tmp/tdep.db}
+  tt: |-
+    merge-all-dbs
+
+- id: backup-db
+  jq: |
+    ($file / ".") as [ $base, $suf ] | "mv \($file) \($base)-\($date).\($suf)"
+  sh: |
+    file=${1:-tmp/tdep.db}
+    date=$(date +%Y-%m-%d -r $file)
+    self -nr --arg file $file --arg date $date
+
+- id: hourly-db
+  jq: |
+    "attach '\($out)' as out;
+    create table out.hours as select date_trunc('hour', to_timestamp(uts)) as start, appli, node,
+    sum(size) sum, count(*) cnt, min(size) min, max(size) max, avg(size) avg
+    from stat where uts > 0 and size != 0 group by 1, 2, 3 order by start"
+  sh: |
+    self -nr --arg out ${1:-out/tdep-hours.db}
+  tt: |-
+    hourly-db | duckdb tmp/tdep.db
+    duckdb tmp/tdep-hours.db --csv -c 'select * from hours' > tmp/tdep-hours.csv
+
+- id: spike
+  sql: |
+    select start, appli, cnt, sum as total, (max / avg) as spike from hours where spike > 10 order by spike desc
+  sh: |
+    <<< "$sql" duckdb ${1:-tmp/tdep-hours.db}

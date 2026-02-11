@@ -1,0 +1,331 @@
+---
+
+- m4:
+    ME: fsdb-stat
+    DB: out/ssp-small.db
+  
+- id:
+  ns: ME
+
+- id: sql
+  sh: |
+    jq ". + [\"$sql\""] "$@"
+
+- id: empty
+  sh: echo []
+
+- id: run
+  sh: |
+    { echo ${show:+.maxrows $show}; echo ${head:+.headers $head}; cat; } | duckdb DB "$@"
+
+- id: mrun
+  sh: |
+    merge-cte | run "$@"
+
+- id: ddb
+  sh: |
+    mrun | sed 3d
+
+- id: time-slice-data
+  jq: |
+    1 as $second | 60 as $minut | ($minut * 60) as $hour | ($hour * 24) as $day
+    | ($day * 7) as $week | ($day * 30.5) as $month | ($day * 365) as $year
+    | 354361425 as $all
+    | { $second, $minut, $hour, $day, $week, $month, $year, $all }
+  sh: |
+    self -n
+  tt: |
+    time-slice-data
+
+- id: time-slice
+  jq: |
+    .[$slice | if .[-1:] == "s" then .[:-1] end] * $n
+  sh: |
+    if [[ $# == 0 ]]; then local slice=all n=1; elif [[ $# == 1 ]]; then local slice=$1 n=1; else local n=$1 slice=$2; fi
+    time-slice-data | self --arg slice $slice --argjson n $n
+  tt: |-
+    time-slice
+    time-slice minut
+    time-slice 5 minuts
+
+- id: use
+  sh: |
+    start | eval ${1:?} "${@:2}" | mrun ${fmt:+-$fmt}
+  tt: |
+    fmt=markdown use empty-applis
+
+- id: merge-cte
+  doc: common table expressions
+  jq: |
+    def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g");
+    def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
+    [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+  sh: |
+    self -r
+  tt: |
+    start | merge-cte
+    start | span | keep-span | stats appli | merge-cte
+
+- id: show-cte
+  jq: .[]
+  sh: |
+    eval $(args "$@")
+    start | eval ${1:?} "${args[@]}" | self -r
+  tt: |
+    show-cte list-applis
+
+- id: show-sql
+  sh: |
+    eval $(args "$@")
+    start | eval ${1:?} "${args[@]}" | merge-cte
+  tt: |
+    show-cte list-applis
+
+- id: use
+  sh: |
+    start | eval ${1:?} "${@:2}" | mrun ${fmt:+-$fmt}
+  tt: |
+    fmt=markdown use empty-applis
+
+################ CTE
+
+- id: start
+  type: start
+  sql: |-
+    FROM \($table)
+  sh: |
+    sql -n --arg table ${1:-fsdb}
+  tt: |
+    start
+    start alt
+
+- id: limit
+  type: output
+  sql: |-
+    SELECT * from {prev} LIMIT \($limit)
+  sh: |
+    sql --arg limit ${1:-40}
+  tt: |
+    empty | limit
+
+- id: human
+  type: output
+  sql: |-
+    SELECT *, \($ARGS.positional | map("format_bytes(\(.)::BIGINT) AS h\(.)") | join(", ")) FROM {prev}
+  sh: |
+    : ${1:?}; sql --args "$@"
+
+- id: order
+  type: output
+  sql: |-
+    SELECT * FROM {prev} ORDER BY \($order) \($dir)
+  sh: |
+    sql --arg order ${1:?} --arg dir ${2:-DESC}
+
+- id: hide
+  type: ouput
+  sql: |-
+    SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}
+  sh: |
+    sql --args "$@"
+  tt: |
+    hide size cnt
+
+- id: cnt
+  type: aggregate
+  sql: |-
+    SELECT \($group), COUNT(*) AS cnt FROM {prev} GROUP BY \($group)
+  sh: |
+    sql --arg group ${1:?}
+  tt: |
+    start | cnt appli
+
+- id: sum
+  type: aggregate
+  sql: |-
+    SELECT \($group), \($sum / "," | map("SUM(\(.)) AS \(.)") | join(", ")) FROM {prev} GROUP BY \($group)
+  sh: |-
+    sql --arg group ${1:?} --arg sum ${2:-cnt,size}
+  tt: |-
+    start | sum server size | mrun
+    start | sum server,path[1] cnt,size | mrun
+
+- id: begin
+  type: filter
+  sql: |-
+    SELECT * FROM {prev} WHERE CAST(date AS DATE) >= '\($date)'
+  sh: |
+    sql --arg date ${1:-2020-01-01}
+  tt: |
+    start | begin | mrun
+
+- id: end
+  type: filter
+  sql: |-
+    SELECT * FROM {prev} WHERE CAST(date AS DATE) < '\($date)'
+  sh: |
+    sql --arg date ${1:?}
+  tt: |
+    start | end 2020-01-01 | mrun
+
+- id: year
+  type: filter
+  sql: |-
+    SELECT * FROM {prev} WHERE EXTRACT(YEAR FROM date) = \($year)
+  sh: |
+    sql --arg year ${1:-$(date +%Y)}
+  tt: |
+    start | year | mrun
+
+- id: bigger
+  jq: |-
+    ["KMGT" / "", [range(4) | pow(2; (. + 1) * 10)]] | transpose | map({(first): last}) | add | .[$unit] * $n
+  sql: |-
+    SELECT * from {prev} WHERE size >= \($size)
+  sh: |-
+    sql --argjson size $(self -n --arg unit ${1:-K} --argjson n ${2:-1})
+
+- id: span
+  type: expand
+  sql: |-
+    SELECT *, STRFTIME(date, '\($span)') AS span from {prev}
+  sh: |
+    sql --arg span ${1:-%Y}
+  tt: |
+    start | span | mrun
+
+- id: since
+  type: filter
+  sql: |-
+    WITH max_date AS (SELECT MAX(date) AS max_date FROM {prev})
+    SELECT * FROM {prev}, max_date
+    WHERE date >= (SELECT max_date - INTERVAL \($n) \($period) FROM max_date)
+      AND date <= (SELECT max_date FROM max_date)
+  sh: |-
+    sql --arg period ${1:-year} --arg n ${2:-1}
+  tt: |-
+    start | since | mrun
+    start | since month | mrun
+    start | since week 2 | mrun
+    start | span | since | sum span,server,path[1] cnt,size | order span,size | human cnt size | mrun
+
+- id: between
+  type: filter
+  sql: |-
+    SELECT * FROM {prev} WHERE CAST(date AS DATE) BETWEEN '\($begin)' and '\($end)'
+  sh: |
+    : ${2:?}; sql --arg begin $1 --arg end $2
+  tt: |
+    start | between 2024-06-01 2024-06-30 | mrun
+
+#- id: def-span
+#  type: constant
+#  sql: |
+#    SELECT *, MAX(uts) OVER () AS max_uts, MAX(uts) OVER () - \($ts) AS min_uts FROM {prev}
+#  sh: |
+#    sql --arg ts "$(time-slice "$@")"
+#  tt: |
+#    def-span year
+#    def-span 2 week
+#
+#- id: keep-span
+#  type: filter
+#  sql: |
+#    SELECT *, strftime(to_timestamp(uts), '\($df)') AS day FROM {prev} WHERE uts BETWEEN min_uts AND max_uts AND uts <> 0
+#  sh: |
+#    sql --arg df ${1:-%Y-%m-%d}
+#  tt: |
+#    def-span 6 hours; keep-span %H:%M:%S
+#
+#- id: span
+#  type: filter
+#  jq: |
+#    $ARGS.positional | map(select(test("%"))) as $df | [(. - $df) | join(" "), $df[0] // ""] | "def-span \(first) | keep-span \(last)"
+#  sh: |
+#   eval $(self -nr --args "$@")
+#  tt: |
+#    span
+#    span year
+#    span day %M-%D
+#    span 6 hours %H:%M
+
+- id: time-bucket-depth
+  type: aggregate
+  sql: |-
+    SELECT time_bucket(INTERVAL '\($n) \($bucket)', date) as time,
+    server,
+    path[1:\($depth)] as depth,
+    sum(cnt) as cnt,
+    sum(size) as size,
+    min(min) as min_size,
+    max(max) as max_size,
+    sum(size) / sum(cnt) as avg_size
+    from {prev} group by all
+  sh: |
+    local -A opts; local args cont; opts "$@"
+    start | sql --arg bucket ${args[0]:-year} --arg depth ${opts[d]:-1} --arg n ${opts[n]:-1}
+  tt: |
+    time-bucket | mrun
+
+- id: n-ts-bucket
+  type: constant
+  sql: |-
+    SELECT *
+    , CAST(((max_uts - min_uts) * 1.0) / \($n) AS BIGINT) AS span
+    , (uts // span) * span AS ts_bucket
+    , strftime(to_timestamp(ts_bucket), '\($df)') AS bucket_time FROM {prev}
+  sh: |
+    eval $(args "$@")
+    sql --argjson n $args --arg df ${df:-%Y-%m-%d}
+  tt: |
+    empty | n-ts-bucket 20
+
+- id: ts_bucket
+  type: constant
+  sql: |-
+    SELECT *
+    , (uts // \($span)) * \($span) AS ts_bucket
+    , strftime(to_timestamp(ts_bucket), '\($df)') AS bucket_time FROM {prev}
+  sh: |
+    eval $(args "$@")
+    sql --arg span $(time-slice ${args[@]}) --arg df ${df:-%Y-%m-%d}
+  tt: |
+    empty | ts_bucket month
+
+- id: where
+  type: filter
+  sql: |-
+    SELECT * FROM {prev} WHERE \($ARGS.positional | join(" "))
+  sh: |
+    sql --args "$@"
+  tt: |
+    empty | where uts != 0
+
+- id: is
+  type: filter
+  sh: |
+    : ${2:?}; where $1 == "'$2'"
+  tt: |
+    empty | is appli mailmerge
+
+- id: like
+  type: filter
+  sh: |
+    : ${2:?}; where $1 like "'$2'"
+  tt: |
+    empty | is appli mailmerge
+
+################ pipe
+
+- id: sum-server
+  sh: |
+    start | sum server cnt,size | human cnt size | order size
+  tt: |
+    sum-server | mrun -box
+
+- id: sum-server-path
+  sh: |
+    start | sum server,path[1:${1:-1}] cnt,size | human cnt size | order size | limit
+  tt: |
+    sum-server-path | mrun | sed 3d
+    sum-server-path 2 | limit | mrun | sed 3d

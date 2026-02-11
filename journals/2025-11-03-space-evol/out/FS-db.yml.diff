@@ -1,0 +1,341 @@
+diff --git a/2025/2025-11-03-space-evol/FS-db.yml b/2025/2025-11-03-space-evol/FS-db.yml
+index 885253bf..14ab11a6 100644
+--- a/2025/2025-11-03-space-evol/FS-db.yml
++++ b/2025/2025-11-03-space-evol/FS-db.yml
+@@ -15,7 +15,7 @@
+ 
+ - id:
+   ns: ME
+-  lv: [ jq, sql, python ]
++  lv: [ jq, sql, python, perl ]
+ 
+ # jqsh helpers
+ 
+@@ -33,54 +33,264 @@
+ 
+ - id: var
+   jq: |
+-    getpath($ARGS.positional)
++    getpath($var / ".")
+   sh: |
+-    < DATA ejq | self -r --args "$@"
++    < DATA ejq | self -r --arg var ${1:?}
+   tt: |-
+     var
+     var mailmerge
+-    var mailmerge node
+-    var ssp upload path
++    var mailmerge.node
++    var ssp.upload.path
+ 
+ - m4:
+     SPLIT: |
+       def splitBy($n; $s): inputs / $s | [.[:$n][], (.[$n:] | join($s))] | last |= (. / ",")[0];
+       def splitBy($s): splitBy(1; $s);
+ 
+-- id: files-stat
++- id: stat-args
++  js: { "Y": uts, s: size, f: mode, h: nlinks, u: uid, g: gid, U: uname, G: gname }
+   jq: |
+-    SPLIT splitBy(2; " ") | map(try tonumber // .)
++    . / "" | map("%" + . | if . | test("[fUG]") then @json else . end) | join(",") | "[\(.)]"
++  sh: |
++    <<< ${1:-Ysi} self -Rr --argjson js "$js"
++  tt: |-
++    stat-args YsifhUG
++
++- id: files-stat
++  perl: |
++    BEGIN { $j = JSON::PP->new->utf8 }
++    chomp;
++    @s = lstat($_);
++    next unless @s;
++    print $j->encode([$s[1], $s[2], $_]), "\n"
+   sh: |
+-    cd ${1:?} && find -type f -print0 | xargs -0r stat -c '%Y %s %n' | self -nRc
++    (cd ${1:?} && find -type f -print0 |
++    if [[ "$2" == imn ]]; then perl -MJSON::PP -0 -ne "$perl"; else xargs -0r stat -c "$(stat-args $2)"; fi)
++  tt: |
++    files-stat /usr/share Ysfihug
++    files-stat /usr/share imn
++    files-stat /usr/share
+ 
+ - id: get-files-stat
+-  jq: |
+-    $ARGS.positional | join("-")
+   sh: |
+-    : ${1:?}; with-lib jqsh ME -- files-stat $(var "$@" path) |
+-    ssh $(var "$@" node) bash | gzip > tmp/$(self -nr --args "$@")-stat.js.gz
++    : ${1:?}; local a=${2:-Ysi}; with-lib jqsh ME -- files-stat $(var $1.path) $a |
++    ssh $(var $1.node) bash | gzip > tmp/$1-$a-stat.js.gz
+   tt: |-
+     get-files-stat mailmerge
+-    get-files-stat ssp apicrypt
+-    get-files-stat ssp upload
++    get-files-stat ssp.apicrypt YsihUG
++    get-files-stat ssp.apicrypt ihug
++    get-files-stat ssp.apicrypt imn
++    get-files-stat ssp.apicrypt
++    get-files-stat ssp.upload
++
++- m4:
++    NORM: |
++      [(null | { $@ } | keys_unsorted), .] | transpose | map({(first): last}) | add
++
++- id: norm-file-stat
++  jq:
++    Ysi: |
++      NORM(uts, size, inode)
++    imn: |
++      NORM(inode, mode, path)
++    ihug: |
++      NORM(inode, nlinks, uid, gid)
++  sh: |
++    local stat=${2:-Ysi}
++    local what=${1:?}-$stat
++    < tmp/$what-stat.js.gz zcat | jq "${jq[$stat]}" -c
++  tt: |-
++    norm-file-stat ssp.apicrypt Ysi
++    norm-file-stat ssp.apicrypt imn
++    norm-file-stat ssp.apicrypt ihug
++
++- id: install-libmagic
++  sh: ssh $(var $1.node) -l root apt install -y libfile-libmagic-perl
++  tt: |-
++    install-libmagic ssp.apicrypt
++    install-libmagic mailmerge
++    
++  # require `apt install libfile-libmagic-perl`
++- id: files-type
++  perl: |
++    BEGIN {
++      $j = JSON::PP->new->utf8;
++      $magic = File::LibMagic->new(follow_symlinks => 1, uncompress => 0);
++      $| = 1;
++    }
++    chomp;
++    my $filename = $_;
++    
++    eval {
++      my $info = $magic->info_from_filename($filename);
++      if ($info) {
++        print $j->encode([$filename, $info->{mime_type}, $info->{encoding}]), "\n";
++      } else {
++        print $j->encode([$filename, undef, undef]), "\n";
++      }
++    };
++    
++    # Check if the eval block died
++    if ($@) {
++      my $err = "$@"; # Capture the error message
++      chomp $err;
++      $err =~ s/ at \/usr\/lib.*//; # Clean up error string
++      $err =~ s/, <> chunk \d+.//;
++      
++      # Print a log message to STDERR for visibility
++      print STDERR "Caught fatal error for '$filename': $err\n";
++      
++      # Print an ERROR record to STDOUT to continue the stream
++      print $j->encode([$filename, "ERROR", $err]), "\n";
++    }
++  sh: |
++    (cd ${1:?} && find . -type f -print0 | perl -MJSON::PP -MFile::LibMagic -0 -ne "$perl")
++  tt: |
++    files-type /usr/share
++    files-type ssp.upload
+ 
+-- id: create-files-stat-db
++- id: files-type-1
++  perl: |
++    BEGIN {
++      $j = JSON::PP->new->utf8;
++      $magic = File::LibMagic->new(follow_symlinks => 1, uncompress => 0)
++    }
++    chomp;
++    my $info = $magic->info_from_filename($_);
++    if ($info) {
++      print $j->encode([$_, $info->{mime_type}, $info->{encoding}]), "\n";
++    } else {
++      print $j->encode([$_, undef, undef]), "\n";
++    }
++  sh: |
++    (cd ${1:?} && find . -type f -print0 | perl -MJSON::PP -MFile::LibMagic -0 -ne "$perl")
++  tt: |
++    files-type /usr/share
++    files-type ssp.upload
++
++- id: get-files-type
++  sh: |
++    with-lib jqsh ME -- files-type $(var ${1:?}.path) | ssh $(var $1.node) bash | gzip > tmp/$1-type.js.gz
++  tt: |-
++    get-files-type ssp.apicrypt
++    get-files-type ssp.upload
++
++- id: norm-file-type
++  jq: |
++    NORM(path, type, charset)
++  sh: |
++    < tmp/${1:?}-type.js.gz zcat | self -c
++  tt: |
++    norm-file-type ssp.apicrypt
++
++- id: get-all-data
++  js: [ Ysi, ihug, imn ]
++  jq: |
++    "get-files-stat \($what) \($stat[])", "get-files-type \($what)"
++  sh: |
++    . <(self -nr --arg what ${1:?} --argjson stat "$js")
++  tt: |-
++    get-all-data ssp.upload
++
++################
++
++- id: vacuum
++  sh: |
++    <<< vacuum duckdb tmp/${1:?}-stat.db
++  tt: |-
++    vacuum ssp.apicrypt
++
++- id: show-tables
+   sql: |
+-    CREATE TABLE stat AS
+-    SELECT
+-        data[0]::BIGINT AS uts,
+-        data[1]::BIGINT AS size,
+-        data[2]::VARCHAR AS path
+-    FROM read_json_auto('/dev/stdin', columns={'data': 'JSON'});
++    show tables
++  sh: |
++    <<< "$sql" duckdb tmp/${1:?}-stat.db
++  tt: |-
++    show-tables ssp.apicrypt
++
++- m4:
++    SQL: |-
++      : ${2:?}; self -nr --arg table ${2} --arg limit ${3:-10} | duckdb "$@" tmp/${1:?}-stat.db
++
++- id: describe-table
++  jq: |
++    "describe table \($table)"
++  sh: SQL
++  tt: |-
++    describe-table ssp.apicrypt stat
++
++- id: summarize-table
++  jq: |
++    "summarize \($table)"
++  sh: SQL ${fmt:+-$fmt}
++  tt: |-
++    summarize-table ssp.apicrypt stat
++
++- id: table-head
++  jq: |
++    "select * from \($table) limit \($limit)"
++  sh: SQL ${fmt:+-$fmt}
++  tt: |-
++    table-head ssp.apicrypt stat
++    fmt=box table-head ssp.apicrypt stat 50
++
++- id: table-sample
++  jq: |
++    "select * from \($table) tablesample \($limit) rows"
++  sh: SQL ${fmt:+-$fmt}
++  tt: |-
++    table-sample ssp.apicrypt stat
++    fmt=box table-sample ssp.apicrypt stat 50
++
++################
++
++- id: add-stat-table
++  js:
++    Ysi: { uts: UBIGINT, size: UBIGINT, inode: UBIGINT }
++    imn: { inode: UBIGINT, mode: USMALLINT, path: VARCHAR }
++    ihug: { inode: UBIGINT, nlinks: USMALLINT, uid: USMALLINT, gid: USMALLINT }
+   jq: |
+-    $ARGS.positional | join("-")
++    .[$stat] | "CREATE TABLE \($stat) AS select * from read_json('/dev/stdin', columns = \(@json))"
+   sh: |
+-    : ${1:?}; local what=$(self -nr --args "$@")
+-    < tmp/$what-stat.js.gz zcat | duckdb tmp/$what-stat.db -c "$sql"
++    local stat=${2:-Ysi}; local sql=$(<<< "$js" self --arg stat $stat -r)
++    norm-file-stat "$@" | duckdb tmp/${1:?}-stat.db -c "$sql"
+   tt: |-
+-    create-files-stat-db mailmerge
+-    create-files-stat-db ssp apicrypt
+-    create-files-stat-db ssp upload
++    add-table mailmerge
++    add-table ssp.apicrypt Ysi
++    add-table ssp.apicrypt imn
++    add-table ssp.apicrypt ihug
++    add-table ssp.upload
++
++- id: add-file-table
++  js: { path: VARCHAR, type: VARCHAR, charset: VARCHAR }
++  jq: |
++    "CREATE TABLE file AS select * from read_json('/dev/stdin', columns = \(@json))"
++  sh: |
++    norm-file-type ${1:?} | duckdb tmp/$1-stat.db -c "$(<<< "$js" self -r)"
++  tt: |-
++    add-file-table ssp.apicrypt
++
++- id: add-tables
++  jq: |
++    $ARGS.positional[] | "add-stat-table \($base) \(.)"
++  sh: |
++    . <(self -nr --arg base ${1:?} --args Ysi imn ihug)
++    add-file-table ssp.apicrypt
++  tt: |
++    add-tables ssp.apicrypt
++
++- id: join-tables
++  sql: |
++    CREATE TABLE stat AS
++    Select Ysi.inode, uts, size, nlinks, uid, gid, mode, imn.path, type, charset FROM Ysi
++    JOIN imn ON Ysi.inode = imn.inode
++    JOIN ihug ON Ysi.inode = ihug.inode
++    JOIN file ON imn.path = file.path;
++    DROP TABLE Ysi; DROP TABLE imn; DROP table ihug; drop table file
++  sh: |
++    <<< "$sql" duckdb tmp/${1:?}-stat.db
++  tt: |-
++    join-tables ssp.apicrypt
+ 
+ - id: size-by-period
+   jq: |
+@@ -88,18 +298,29 @@
+         strftime(to_timestamp(uts), '\($period)') AS period,
+         COUNT(*) AS cnt,
+         ROUND(SUM(size)::DOUBLE / POWER(1024, \($power)), 2) AS size
+-    FROM stat
+-    GROUP BY period
+-    ORDER BY period;"
++    FROM \($table) GROUP BY period ORDER BY period"
+   sh: |
+-    self -nr --arg period $period --arg power $power |
+-    duckdb tmp/$(printf "%s\n" "$@" | paste -sd-)-stat.db -${fmt:-markdown}
++    self -nr --arg table ${table:-stat} --arg period $period --arg power $power |
++    duckdb tmp/$1-stat.db -${fmt:-markdown}
+   tt: |-
+     period=%Y power=3 size-by-period mailmerge
++    table=Ysi period=%Y power=3 size-by-period mailmerge
+     period=%H power=3 size-by-period mailmerge
+     period=%Y-%m power=2 size-by-period mailmerge
+-    period=%Y power=3 size-by-period ssp apicrypt
+-    period=%Y power=3 size-by-period ssp upload
++    period=%Y power=3 size-by-period ssp.apicrypt
++    period=%Y power=3 size-by-period ssp.upload
++
++- id: simple-plot
++  jq: |
++    "SELECT period, \($what),
++    REPEAT('\u2588', (\($what) * \($max) / MAX(\($what)) OVER ())::INTEGER) AS bar
++    FROM read_json('/dev/stdin') ORDER by period"
++  sh: |
++    duckdb -markdown -c "$(self -nr --arg what ${1?} --arg max ${2:-40})"
++  tt: |-
++    period=%Y power=3 fmt=json size-by-period ssp.apicrypt | simple-plot cnt
++    period=%Y-%m power=2 fmt=json size-by-period ssp.apicrypt | simple-plot cnt
++    table=Ysi period=%Y power=3 fmt=json size-by-period mailmerge | simple-plot cnt
+ 
+ - id: plot-size-by-period
+   jq: |

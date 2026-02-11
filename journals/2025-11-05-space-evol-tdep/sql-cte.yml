@@ -1,0 +1,211 @@
+---
+
+- id:
+  ns: stat-sql
+  lv: [ jq, sql ]
+
+- id: macros
+  sql: |
+    CREATE MACRO rpow(v, p=30) AS round(v / pow(2, p), 2);
+  sh: |
+    sql -n
+
+- id: start
+  type: start
+  sql: |
+    FROM \($table)
+  sh: |
+    sql -n --arg table ${1:-stat}
+  tt: |
+    start
+    start alt
+
+- id: plot
+  type: output
+  sql: |
+    SELECT *, REPEAT('\u2588', (\($col) * \($width) / MAX(\($col)) OVER ())::INTEGER) AS \($col)_bar FROM {prev}
+  sh: |
+    sql --arg col ${1:?} --arg width ${2:-40}
+
+- id: limit
+  type: output
+  sql: |
+    SELECT * from {prev} LIMIT \($limit)
+  sh: |
+    sql --arg limit ${1:-40}
+  tt: |
+    empty | limit
+
+- id: order
+  type: output
+  sql: |
+    SELECT * FROM {prev} ORDER BY \($order) \($dir)
+  sh: |
+    sql --arg order ${1:?} --arg dir ${2:-DESC}
+
+- id: keep
+  type: output
+  sql: |
+    SELECT \($ARGS.positional | join(", ")) FROM {prev}
+  sh: |
+    sql --args "$@"
+  tt: |
+    start | cnt appli | keep appli
+
+- id: copy
+  type: output
+  jq: |
+    def pairs($a): [$a, []] | until(.[0] == []; .[1] += [.[0][:2]] | del(.[0][:2]))[1];
+    . + [pairs($ARGS.positional) | map("\(first) AS \(last)") | "SELECT *, " + join(", ") + " FROM {prev}" ]
+  sh: |
+    : ${2:?}; self --args "$@"
+  tt: |
+    empty | copy bucket_time date size bytes
+
+- id: hide
+  type: ouput
+  sql: |
+    SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}
+  sh: |
+    sql --args "$@"
+  tt: |
+    hide size cnt
+
+- id: cnt
+  type: aggregate
+  sql: |
+    SELECT \($group), COUNT(*) AS cnt FROM {prev} GROUP BY \($group)
+  sh: |
+    sql --arg group ${1:?}
+  tt: |
+    start | cnt appli
+
+- id: sum
+  type: aggregate
+  sql: |
+    SELECT \($group), SUM(\($sum)) AS \($sum) FROM {prev} GROUP BY \($group)
+  sh: |
+    sql --arg group ${1:?} --arg sum ${2:-size}
+  tt: |
+    start | sum appli | where size != 0
+
+- id: def-span
+  type: constant
+  sql: |
+    SELECT *, MAX(uts) OVER () AS max_uts, MAX(uts) OVER () - \($ts) AS min_uts FROM {prev}
+  sh: |
+    sql --arg ts "$(time-slice "$@")"
+  tt: |
+    def-span year
+    def-span 2 week
+
+- id: keep-span
+  type: filter
+  sql: |
+    SELECT *, strftime(to_timestamp(uts), '\($df)') AS day FROM {prev} WHERE uts BETWEEN min_uts AND max_uts AND uts <> 0
+  sh: |
+    sql --arg df ${1:-%Y-%m-%d}
+  tt: |
+    def-span 6 hours; keep-span %H:%M:%S
+
+- id: span
+  type: filter
+  jq: |
+    $ARGS.positional | map(select(test("%"))) as $df | [(. - $df) | join(" "), $df[0] // ""] | "def-span \(first) | keep-span \(last)"
+  sh: |
+   eval $(self -nr --args "$@")
+  tt: |
+    span
+    span year
+    span day %M-%D
+    span 6 hours %H:%M
+
+- id: n-ts-bucket
+  type: constant
+  sql: |
+    SELECT *
+    , CAST(((max_uts - min_uts) * 1.0) / \($n) AS BIGINT) AS span
+    , (uts // span) * span AS ts_bucket
+    , strftime(to_timestamp(ts_bucket), '\($df)') AS bucket_time FROM {prev}
+  sh: |
+    eval $(args "$@")
+    sql --argjson n $args --arg df ${df:-%Y-%m-%d}
+  tt: |
+    empty | n-ts-bucket 20
+
+- id: ts_bucket
+  type: constant
+  sql: |
+    SELECT *
+    , (uts // \($span)) * \($span) AS ts_bucket
+    , strftime(to_timestamp(ts_bucket), '\($df)') AS bucket_time FROM {prev}
+  sh: |
+    eval $(args "$@")
+    sql --arg span $(time-slice ${args[@]}) --arg df ${df:-%Y-%m-%d}
+  tt: |
+    empty | ts_bucket month
+
+- id: where
+  type: filter
+  sql: |
+    SELECT * FROM {prev} WHERE \($ARGS.positional | join(" "))
+  sh: |
+    sql --args "$@"
+  tt: |
+    empty | where uts != 0
+
+- id: used
+  type: filter
+  sh: |
+    where uts != 0
+
+- id: is
+  type: filter
+  sh: |
+    : ${2:?}; where $1 == "'$2'"
+  tt: |
+    empty | is appli mailmerge
+
+- id: like
+  type: filter
+  sh: |
+    : ${2:?}; where $1 like "'$2'"
+  tt: |
+    empty | is appli mailmerge
+
+- m4:
+    # Because we use upper case for SQL keywors
+    # Let's use Capitalze for M4 macros
+    Hnum: >-
+      CASE
+        WHEN $1 >= 1e12 THEN printf('%.1fT', $1/1e12)
+        WHEN $1 >= 1e9  THEN printf('%.1fG', $1/1e9)
+        WHEN $1 >= 1e6  THEN printf('%.1fM', $1/1e6)
+        WHEN $1 >= 1e3  THEN printf('%.1fK', $1/1e3)
+        ELSE printf('%d', $1)
+      END
+    Stats_: |-
+      SUM(size) AS size, Hnum(SUM(size)) as hsize, COUNT(*) as cnt, Hnum(COUNT(*)) as hcnt,
+      printf('%.2f', AVG(size)) AS avg, MIN(size) AS min, MAX(size) AS max
+    Stats: |-
+      SUM(size) AS size, Hnum(SUM(size)) as hsize, COUNT(*) as cnt, Hnum(COUNT(*)) as hcnt,
+      ROUND(AVG(size), 2) AS avg, MIN(size) AS min, MAX(size) AS max
+
+- id: stats
+  type: aggregate
+  jq: |
+    . + [ $ARGS.positional | join(", ") as $group_keys | "SELECT \($group_keys), Stats FROM {prev} GROUP BY \($group_keys)" ]
+  sh: |
+    : ${1:?}; self --args "$@"
+  tt: |
+    start | span | keep-span | stats appli
+
+- id: cumsum
+  type: constant
+  sql: |
+    SELECT *, SUM(\($col)) OVER (ORDER BY \($order)) AS cum\($col) FROM {prev}
+  sh: |
+    sql --arg col ${1:?} --arg order ${2:-bucket_time}
+  tt: |
+    start | span | n-ts-bucket 30 | sum bucket_time size | order bucket_time | cumsum size bucket_time
+

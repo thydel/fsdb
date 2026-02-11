@@ -1,0 +1,315 @@
+---
+
+- m4:
+    ME: tdep-hours-sql
+    DB: out/tdep-hours.db
+
+- id:
+  ns: ME
+  lv: [ jq, sql ]
+
+- id: duck
+  sh: duckdb DB "$@"
+
+- id: args
+  sh: |-
+    # Use «local -A opts; local args cont; args "$@"» in caller
+    local opt val tmp i; args=()
+    until [[ $# -eq 0 ]]; do
+        case "$1" in
+            --) shift; break;;
+            --*=*) opt="${1%%=*}"; val="${1#*=}"; opts["${opt:2}"]="$val"; shift;;
+            --*) opts["${1:2}"]="1"; shift;;
+            -[0-9]*) args+=("$1"); shift;;
+            -) args+=("$1"); shift;;
+            -*) tmp=${1:1}
+                for ((i = 0; i < ${#tmp}; i++ )); do
+                    opt="${tmp:$i:1}"
+                    opts[$opt]=$((opts[$opt] + 1))
+                done
+                shift;;
+            *) args+=("$1"); shift;;
+        esac
+    done; cont=("$@")
+
+- id: sql
+  sh: |
+    jq ". + [\"$sql\""] "$@"
+
+- id: merge-cte
+  doc: common table expressions
+  jq: |
+    def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g") | sub("{prev2}"; "step\($i - 2)"; "g");
+    def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
+    [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+  sh: |
+    self -r
+
+- id: run
+  sh: merge-cte | duck "$@"
+
+- id: run-tbl
+  sh: merge-cte | duck -markdown --nullvalue ''
+
+- id: run-bar
+  sh: merge-cte | duck -csv | youplot bar -d, -H; tput sgr0
+
+- id: fix-md-tbl
+  sh: |
+    NBH=$'\u2011' sed -E "s/([[:alnum:]])-([[:alnum:]])/\1$NBH\2/g"
+
+- id: start
+  sql: |
+    FROM \($table)
+  sh: |
+    sql -n --arg table ${1:-hours}
+
+- id: distinct
+  sql: |
+    select distinct \($col) from {prev}
+  sh: sql --arg col ${1:?}
+
+- id: rows
+  sql: |
+    select count(*) from {prev}
+  sh: sql
+
+- id: cnt
+  sql: |
+    select \($group), sum(\($cnt)) as \($cnt) from {prev} group by \($group)
+  sh: |
+    sql --arg group ${1:?} --arg cnt ${2:-cnt}
+  tt: |
+    start | cnt appli
+
+- id: sum
+  sql: |
+    select \($group), sum(\($sum)) as \($sum) from {prev} group by \($group)
+  sh: |
+    sql --arg group ${1:?} --arg sum ${2:-sum}
+  tt: |
+    start | sum appli
+
+- id: col-is
+  sql: |
+    select * from {prev} where \($col) = '\($is)'
+  sh: |
+    : ${2:?}; sql --arg col $1 --arg is $2
+
+- id: where
+  sql: |
+    select * from {prev} where \($ARGS.positional[:-1] | join(" ")) '\($ARGS.positional[-1])'
+  sh: |
+    sql --args "$@"
+
+- id: col-like
+  sql: |
+    select * from {prev} where \($col) like '\($is)'
+  sh: |
+    : ${2:?}; sql --arg col $1 --arg is $2
+
+- id: span-start
+  sql: |
+    select * from {prev} where start > timestamp '\($date)'
+  sh: |
+    sql --arg date ${1:-2020-01-01}
+
+- id: span-end
+  sql: |
+    select * from {prev} where start < timestamp '\($date)'
+  sh: |
+    sql --arg date ${1:-2025-01-01}
+
+- id: span-last
+  sql: |
+    select * from {prev} where start >= (select max(start) from {prev}) - interval \($n) \($u)
+  sh: |
+    local n u
+    if [[ (($# == 1)) ]]; then u=$1; else n=$1 u=$2; fi
+    sql --argjson n ${n:-1} --arg u ${u:-year}
+
+- id: span-first
+  sql: |
+    select * from {prev} where start <= (select min(start) from {prev}) + interval \($n) \($u)
+  sh: |
+    local n u
+    if [[ (($# == 1)) ]]; then u=$1; else n=$1 u=$2; fi
+    sql --argjson n ${n:-1} --arg u ${u:-year}
+
+- id: span-on
+  jq: |
+    . as $in
+    | [["year", "month", "day"], $date / "-"] | transpose
+    | map(select(last // false) | { (first): last | tonumber }) | add
+    | (keys_unsorted | @json | gsub("\""; "'")) as $keys
+    | (@json | gsub("\""; "")) as $date
+    | "select * from {prev} where date_part(\($keys), start) == \($date)"
+    | $in + [.]
+  sh: |
+    self --arg date ${1:?}
+
+- id: resample
+  sql: |
+    select 
+       date_trunc('\($unit)', start) as start, \($cols),
+       sum(sum) as sum, sum(cnt) as cnt,  min(min) as min,
+       max(max) as max, sum(sum) / sum(cnt) as avg
+    from {prev} group by 1, \($gcols)
+  sh: |
+    local unit=${1:-day}
+    local cols="appli, node"
+    local gcols="2, 3"
+    sql --arg unit "$unit" --arg cols "$cols" --arg gcols "$gcols"
+
+- id: move-last
+  # Moves the specified column to the far right
+  sql: |
+    select * exclude(\($col)), \($col) from {prev}
+  sh: |
+    sql --arg col "${1:-total}"
+
+- id: limit-cumul
+  sql: |
+    select * from {prev} 
+    qualify (sum(\($col)) over (order by \($col) desc) - \($col)) / sum(\($col)) over () < \($pct)
+  sh: |
+    # 0.9 = Top apps making up 90% of volume
+    local -A opts; local args cont; args "$@"
+    sql --arg pct ${opts[pct]:-0.9} --arg col ${opts[col]:-sum}
+
+- id: top
+  # Replaces 'limit-cumul' for the common case
+  sql: |
+    SELECT * FROM {prev} ORDER BY sum DESC LIMIT \($n)
+  sh: |
+    sql --arg n ${1:-10}
+
+- id: order
+  type: output
+  sql: |
+    SELECT * FROM {prev} ORDER BY \($order) \($dir)
+  sh: |
+    sql --arg order ${1:?} --arg dir ${2:-DESC}
+
+- id: order-time
+  sql: |
+    select * from {prev} order by \($col) \($dir)
+  sh: |
+    local -A opts; local args cont; args "$@"
+    sql --arg col ${opts[col]:-start} --arg dir ${opts[dir]:-asc}
+
+- id: show
+  # Adds a formatted string column named 'span' (useful for pivots/grouping)
+  # Usage: start | fmt %Y-%m
+  sql: |
+    select strftime(start, '\($show)') as span, * from {prev}
+  sh: |
+    sql --arg show ${1:-%Y-%m}
+
+- id: keep
+  type: output
+  sql: |
+    SELECT \($ARGS.positional | join(", ")) FROM {prev}
+  sh: |
+    sql --args "$@"
+  tt: |
+    start | cnt appli | keep appli
+
+- id: pivot-span-fmt
+  sh: |
+    pivot-span ${1:?} | zerofill $1 | add-sum-row-alt | human $1
+    
+- id: pivot-span
+  sql: |
+    pivot {prev} on span using sum(sum) group by \($ARGS.positional | join(", "))
+  sh: |
+    sql --args "$@"
+
+- id: add-sum-row-orig
+  sql: |
+    select * from {prev} union all
+    select ' TOTAL' as \($col), sum(columns(* exclude(\($col)))) from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: add-row-total
+  # Calculates the row total BEFORE pivoting using a Window Function.
+  # This avoids the complex "sum dynamic columns" problem entirely.
+  sql: |
+    SELECT *, sum(sum) OVER (partition by \($cols)) as total FROM {prev}
+  sh: |
+    # Usage: ... | add-row-total [grouping_key]
+    sql --arg cols "${1:-appli}"
+
+- id: add-sum-row
+  # Usage: ... | add-sum-row
+  # 1. Try to sum every column.
+  # 2. Text columns become NULL.
+  # 3. Numeric columns become Numbers.
+  # 4. COALESCE replaces the NULL (the text column) with ' TOTAL'.
+  sql: |
+    select * from {prev} union all
+    select coalesce(cast(sum(try_cast(columns(*) as hugeint)) as varchar), ' TOTAL')
+    from {prev}
+  sh: |
+    sql
+
+- id: zero-fill
+  # Usage: ... | zerofill node
+  # Reconstructs the table:
+  # 1. Keeps the Label column as-is.
+  # 2. Applies COALESCE to all other columns (filling gaps with 0).
+  # DuckDB automatically preserves the names of the columns in step 2.
+  sql: |
+    SELECT \($col), COALESCE(COLUMNS(* EXCLUDE(\($col))), 0) FROM {prev}
+  sh: |
+    sql --arg col "${1:-node}"
+
+- id: human-on
+  sql: |
+    select columns(* EXCLUDE (\($col))), format_bytes(\($col)::bigint) as \($col) from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: human
+  sql: |
+    select \($col), format_bytes(columns(* EXCLUDE (\($col)))::bigint) from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: human-alt
+  # Automatically formats all integer-like columns to bytes.
+  # "TRY_CAST" satisfies the binder for non-numeric columns (like 'node'),
+  # returning NULL instead of crashing.
+  sql: |
+    SELECT 
+      CASE 
+        WHEN typeof(COLUMNS(*)) IN ('BIGINT', 'UBIGINT', 'HUGEINT') 
+        THEN format_bytes(TRY_CAST(COLUMNS(*) AS BIGINT)) 
+        ELSE CAST(COLUMNS(*) AS VARCHAR)
+      END 
+    FROM {prev}
+  sh: |
+    sql
+
+- id: to-unit
+  # Usage: ... | to-unit g
+  # Validates numbers (via TRY_CAST), divides them, and rounds them.
+  # Uses standard SELECT to preserve column names automatically.
+  sql: |
+    select
+      case
+        when try_cast(columns(*) as double) is not null
+        then cast(round(try_cast(columns(*) as double) / pow(2.0, \($n)), 2) as varchar)
+        else columns(*)
+      end from {prev}
+  sh: |
+    local n
+    case "${1:-g}" in
+      g|gb|GiB) n=30 ;;
+      t|tb|TiB) n=40 ;;
+      m|mb|MiB) n=20 ;;
+      k|kb|KiB) n=10 ;;
+      *) n=${1:-30} ;;
+    esac
+    sql --arg n "$n"

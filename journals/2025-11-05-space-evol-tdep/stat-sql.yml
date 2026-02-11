@@ -1,0 +1,251 @@
+---
+
+- m4:
+    ME: stat-sql
+    DB: out/tdep.db
+
+- id:
+  ns: ME
+  lv: [ jq, sql, sed ]
+
+- id: run
+  sh: |
+    { echo ${show:+.maxrows $show}; echo ${head:+.headers $head}; cat; } | duckdb DB "$@"
+
+- id: mrun
+  sh: merge-cte | run "$@"
+    
+- id: time-slice-data
+  jq: |
+    1 as $second | 60 as $minut | ($minut * 60) as $hour | ($hour * 24) as $day
+    | ($day * 7) as $week | ($day * 30.5) as $month | ($day * 365) as $year
+    | 354361425 as $all
+    | { $second, $minut, $hour, $day, $week, $month, $year, $all }
+  sh: |
+    self -n
+
+- id: time-slice
+  jq: |
+    .[$slice | if .[-1:] == "s" then .[:-1] end] * $n
+  sh: |
+    if [[ $# == 0 ]]; then local slice=all n=1; elif [[ $# == 1 ]]; then local slice=$1 n=1; else local n=$1 slice=$2; fi
+    time-slice-data | self --arg slice $slice --argjson n $n
+  tt: |-
+    time-slice
+    time-slice minut
+    time-slice 5 minuts
+
+- id: sql
+  sh: |
+    jq ". + [\"$sql\""] "$@"
+
+- id: empty
+  sh: echo []
+
+- id: args
+  jq: |
+    def value: if length == 0 then "" elif length == 1 then @sh else "(\(map(@sh) | join(" ")))" end;
+    reduce $ARGS.positional[] as $i ({ opt: "-" }; if ($i[:1]) == "-" then .opt = $i[1:] | .[.opt] = [] else .[.opt] += [$i] end)
+    | .args = .["-"] | del(.opt, .["-"])
+    | to_entries[] | "local \(.key)=\(.value | value)"
+  sh: |
+    self -nr --args -- "$@"
+  tt: |
+    args -x 1 -y 2 3 4 -- 5 6
+
+- id: merge-cte
+  doc: common table expressions
+  jq: |
+    def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)");
+    def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
+    [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+  sh: |
+    self -r
+  tt: |
+    start | merge-cte
+    start | span | keep-span | stats appli | merge-cte
+
+- id: time-size
+  sh: |
+    eval $(args "$@")
+    span ${span[@]} | n-ts-bucket $n | stats bucket_time |
+    copy bucket_time date | keep date size | order date asc
+  tt: |
+    time-size -span 2 year -n 30
+
+# pipelines helper
+
+- id: show-cte
+  jq: .[]
+  sh: |
+    eval $(args "$@")
+    start | eval ${1:?} "${args[@]}" | self -r
+  tt: |
+    show-cte list-applis
+
+- id: show-sql
+  sh: |
+    eval $(args "$@")
+    start | eval ${1:?} "${args[@]}" | merge-cte
+  tt: |
+    show-cte list-applis
+
+- id: use
+  sh: |
+    start | eval ${1:?} "${@:2}" | mrun ${fmt:+-$fmt}
+  tt: |
+    fmt=markdown use empty-applis
+
+# pipelines
+
+- id: empty-applis
+  doc: applis that have no files have one pseudo file with a zero epoch and size
+  sh: cnt appli | where cnt == 1 | keep appli | order appli asc
+  tt: fmt=list head=no use empty-applis
+
+- id: empty-files
+  doc: number of empty files by appli
+  sh: where uts != 0 and size == 0 | cnt appli | order cnt
+  tt: |
+    show-cte empty-files
+    show-sql empty-files
+    use empty-files
+    fmt=csv use empty-files
+
+- id: applis
+  doc: keep only appli with files
+  sh: where uts != 0
+
+- id: list-applis
+  sh: applis | cnt appli | keep appli
+  tt: fmt=list head=no use used-applis
+
+- id: cnt-applis
+  sh: |
+    eval $(args "$@"); set -- "${args[@]}"
+    applis | cnt appli | order cnt | limit $n | plot cnt $w
+  tt: use cnt-applis -n 25 -w 80
+  
+- id: plot-cnt
+  sh: |
+    eval $(args "$@"); set -- "${args[@]}"
+    applis | cnt ${args:-appli} | order cnt | limit $n | plot cnt $w
+  tt: |
+    fmt=markdown use plot-cnt -n 25 -w 80
+    fmt=markdown use plot-cnt node
+  
+- id: plot-sum
+  sh: |
+    eval $(args "$@"); set -- "${args[@]}"
+    applis | sum ${args:-appli} | order size | limit $n | plot size $w
+  tt: |
+    fmt=markdown use plot-sum -n 25 -w 80
+    fmt=markdown use plot-sum node
+  
+- id: plot-col
+  sh: |
+    local -A map=(cnt cnt sum size)
+    eval $(args "$@"); set -- "${args[@]}"
+    local what=${what:-sum}
+    local col=${map[$what]}
+    applis | eval $what ${args:-appli} | order $col | limit $n | plot $col $w
+  tt: |
+    fmt=markdown use plot-col -n 25 -w 80
+    fmt=markdown use plot-col node
+    fmt=markdown use plot-col -n 25 -w 80 -what cnt
+    fmt=markdown use plot-col node -what cnt
+  
+- id: aggregates
+  sh: |
+    eval $(args "$@"); set -- "${args[@]}"
+    if [[ "$is" ]]; then is ${is[@]}; else cat; fi |
+    span ${span[@]} | n-ts-bucket $n | stats ${is[0]} ts_bucket bucket_time |
+    cumsum size bucket_time | cumsum cnt bucket_time |
+    copy bucket_time date | keep date ${cols[@]} | order date asc
+  tt: |
+    use aggregates -span 2 year -n 30 -cols size cnt
+    use aggregates -is apli mailmerge -span 2 year -n 30 -cols appli size cnt
+    use aggregates -is split split2 -span 2 year -n 30 -cols split size cnt
+    use aggregates -is node prostrm1 -span 2 year -n 30 -cols node size cnt
+    
+- id: aggregates1
+  sh: |
+    eval $(args "$@"); set -- "${args[@]}"
+    span ${span[@]} | n-ts-bucket $n | stats ts_bucket bucket_time |
+    cumsum size bucket_time | cumsum cnt bucket_time |
+    copy bucket_time date | keep date ${cols[@]} | order date asc
+  tt: |
+    use aggregates -span 2 year -n 30 -cols size cnt
+
+- id: plots
+  jq: |
+    $ARGS.positional | map("plot \(.)") | join(" | ")
+  sh: |
+    self -nr --args "$@"
+  tt: |
+    plots size cnt
+
+- id: fix-md-tbl-fail
+  sed: |
+    2,$s/([a-z][a-z0-9-]+)/`\1`/; 1s/ \|/   |/; 2s/-\|/---|/
+  sh: |
+    sed -E "$sed"
+
+- id: fix-md-tbl
+  sh: |
+    NBH=$'\u2011' sed -E "s/([[:alnum:]])-([[:alnum:]])/\1$NBH\2/g"
+
+- id: wrap-html-tbl
+  lv: [ tpl ]
+  tpl: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body { font-size: \($pt)pt; font-family: "Liberation Mono", monospace; margin: 0; }
+        table { border-collapse: collapse; border: 1px solid #ccc; width: auto; }
+        th, td { border: 1px solid #ccc; padding: 4px 8px; }
+      </style>
+    </head><body><table>
+    \(.)
+    </table></body></html>
+  sed: |
+    s/"/\\"/g; 1s/^/"/; $s/$/"/
+  sh: |
+    jq "$(<<< "$tpl" sed "$sed")" -sRr --argjson pt ${1:-16}
+
+- id: html-to-jpg
+  sh: |
+    wkhtmltoimage --enable-local-file-access --quality 90 - -
+
+- id: html-tbl-to-jpeg
+  sh: wrap-html-tbl $1 | html-to-jpg
+
+- id: install-youplot
+  sh: |
+    sudo aptitude install ruby ruby-dev build-essential
+    sudo gem install youplot
+
+- id: install-qsv
+  sh: |
+    sudo aptitude install libwayland-dev
+    rustup update
+    cargo build --release --locked --bin qsv --features all_features
+
+- id: hist
+  sh: |
+    eval $(args "$@")
+    aggregates -span ${span[@]} -is ${is[@]} -n $n -cols ${cols[@]} | eval $(plots ${cols[@]})
+  tt: |
+    use hist -span 2 year -n 30 -cols size cnt cumsize cumcnt
+    fmt=markdown use hist -span 2 year -n 30 -cols cumsize avg cnt
+    fmt=markdown use hist -is node prostrm1 -span 2 year -n 30 -cols cumsize
+
+- id: hist1
+  sh: |
+    eval $(args "$@")
+    aggregates -span ${span[@]} -n $n -cols ${cols[@]} | eval $(plots ${cols[@]})
+  tt: |
+    use hist -span 2 year -n 30 -cols size cnt cumsize cumcnt
+    fmt=markdown use hist -span 2 year -n 30 -cols cumsize avg cnt

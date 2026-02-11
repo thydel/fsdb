@@ -1,0 +1,201 @@
+---
+
+- m4:
+    ME: tdep-sql
+    DB: tmp/tdep.db
+
+- id:
+  ns: ME
+  lv: [ jq, sql ]
+
+- id: duck
+  sh: duckdb DB "$@"
+
+- id: args
+  sh: |-
+    # Use «local -A opts; local args cont; args "$@"» in caller
+    local opt val tmp i; args=()
+    until [[ $# -eq 0 ]]; do
+        case "$1" in
+            --) shift; break;;
+            --*=*) opt="${1%%=*}"; val="${1#*=}"; opts["${opt:2}"]="$val"; shift;;
+            --*) opts["${1:2}"]="1"; shift;;
+            -[0-9]*) args+=("$1"); shift;;
+            -) args+=("$1"); shift;;
+            -*) tmp=${1:1}
+                for ((i = 0; i < ${#tmp}; i++ )); do
+                    opt="${tmp:$i:1}"
+                    opts[$opt]=$((opts[$opt] + 1))
+                done
+                shift;;
+            *) args+=("$1"); shift;;
+        esac
+    done; cont=("$@")
+
+- id: sql
+  sh: |
+    jq ". + [\"$sql\""] "$@"
+
+- id: merge-cte
+  doc: common table expressions
+  jq: |
+    def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g") | sub("{prev2}"; "step\($i - 2)"; "g");
+    def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
+    [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+  sh: |
+    self -r
+
+- id: run
+  sh: merge-cte | duck "$@"
+
+- id: sum-size
+  sh: |
+    local col=${1:-appli}
+    start | used | group-sum $col | order --col=size | add-sum-row $col 
+  tt: |
+    sum-size | run -box
+    sum-size | human | run -box
+    sum-size | limit-cumul --col=size --cpt=.99 | human | run -box
+    sum-size node | order --col=size | human node | run -markdown
+
+- id: report
+  sh: |
+    local -A opts; local args cont; args "$@"
+    start | used | span ${opts[span]:-%Y} | since ${opts[since]:-2020-01-01} | group-sum |
+    add-total | pivot appli total | limit-cumul --pct=${opts[pct]:-.95} | order | add-sum-row | human
+  sh2: |
+    local -A opts; local args cont; args "$@"
+    start | used | span ${opts[span]:-%Y} | since ${opts[since]:-2020-01-01} | group-sum ${opts[col]:-appli} span |
+    add-total ${opts[col]:-appli} | pivot ${opts[col]:-appli} total |
+    limit-cumul --col=${opts[col]:-appli} --pct=${opts[pct]:-.95} | order --col=${opts[col]:-appli} | add-sum-row ${opts[col]:-appli} | human ${opts[col]:-appli}
+  tt: |
+    report | run
+    report --col=node | run
+    report --since=2024-01-01 | run
+    report --since=2025-01-01 --span=%Y-%m | run --markdown
+    report --since=2025-10-01 --span=%W | run --markdown
+    report --since=2024-01-01 --pct=1 | run
+
+################ pipelines
+
+  tt: |
+    start | used | span %Y | since | group-sum | add-total | pivot appli total | order --col=total
+    start | used | span %Y-%m | since 2025-01-01 | group-sum | add-total | pivot appli total | order --col=total
+  tt: |
+    start | used | span %Y | since | group-sum | add-total | pivot appli total | limit-cumul | order --col=total
+    start | used | span %Y-%m | since 2025-06-01 | group-sum | add-total | pivot appli total | limit-cumul | order --col=total
+
+################ CTE
+
+- id: empty
+  # test a cte
+  sh: echo []
+  tt: |
+    empty | span
+
+- id: start
+  # first cte
+  sql: |
+    FROM \($table)
+  sh: |
+    sql -n --arg table ${1:-stat}
+
+- id: used
+  # Remove appli without any files
+  sql: |
+    select * from {prev} where uts != 0
+  sh: sql
+  tt: |
+    start | used
+
+- id: span
+  # select a time span unit
+  sql: |
+    select strftime(to_timestamp(uts), '\($span)') as span, * from {prev}
+  sh: |
+    sql --arg span ${1:-%Y}
+  tt: |
+    start | used | span
+    start | used | span %m
+    start | used | span %Y-%m
+
+- id: since
+  # select a time start point (must match span)
+  sql: |
+    select * from {prev} where uts >= epoch('\($date)'::TIMESTAMP)
+  sh: |
+    sql --arg date ${1:-2020-01-01}
+
+- id: group-sum
+  sql: |
+    select \($ARGS.positional | join(", ")), sum(size) as size from {prev} group by \($ARGS.positional | join(", "))
+  sh: |
+    sql --args ${@:- appli span}
+  tt: |
+    start | used | span | since | group-sum
+    start | used | span | since | group-sum node span
+
+- id: prune
+  sql: |
+    select * from {prev} qualify total >= quantile_cont(total, \($pct)) over ()
+  sh: |
+    sql --arg pct ${1:-0.20}
+  tt: |
+    start | used | span %Y | since | group-sum | add-total | prune | pivot appli total | order --col=total
+
+- id: limit-cumul
+  sql: |
+    select * from {prev} 
+    qualify (sum(\($col)) over (order by \($col) desc) - \($col)) / sum(\($col)) over () < \($pct)
+  sh: |
+    # 0.9 = Top apps making up 90% of volume
+    local -A opts; local args cont; args "$@"
+    sql --arg pct ${opts[pct]:-0.9} --arg col ${opts[col]:-total}
+
+- id: pivot
+  sql: |
+    pivot {prev} on span using sum(size) group by \($ARGS.positional | join(", "))
+  sh: |
+    sql --args "$@"
+
+- id: join-pair
+  sql1: |
+    select * from {prev} join {prev2} on {prev2}.\($col) == {prev}.\($col)
+  sql: |
+    select {prev}.*, {prev2}.* EXCLUDE (\($col)) from {prev} join {prev2}  on {prev2}.\($col) = {prev}.\($col)
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: add-total
+  sql: |
+    select *, sum(size) over (partition by \($col)) as total from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+  tt: |
+    start | used | year | since | add-total | pivot appli,total | order --col=total
+
+- id: add-sum-row
+  sql: |
+    select * from {prev} union all
+    select ' TOTAL' as \($col), sum(columns(* exclude(\($col)))) from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: human
+  sql: |
+    select \($col), format_bytes(columns(* EXCLUDE (\($col)))::bigint) from {prev}
+  sh: |
+    sql --arg col ${1:-appli}
+
+- id: order
+  sql: |
+    select * from {prev} order by \($col) \($dir)
+  sh: |
+    local -A opts; local args cont; args "$@"
+    sql --arg col ${opts[col]:-total} --arg dir ${opts[dir]:-desc}
+
+- id: limit
+  sql: |
+    select * from {prev} limit \($limit)
+  sh: |
+    sql --arg limit ${1:-10}

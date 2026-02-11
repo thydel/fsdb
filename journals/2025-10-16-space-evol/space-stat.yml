@@ -1,0 +1,305 @@
+---
+
+- m4:
+    ME: space-stat
+
+- id:
+  ns: ME
+  lv: [ jq, awk, mk ]
+
+- id: [ with-func-name ]
+  is: [ fa ]
+
+# jqsh helpers
+
+- { id: src, sh: ME src }
+- { id: show, sh: fns ME }
+
+- id: tt
+  jq: INDEX(.[]; .id)[$id].tt
+  sh: src | self -r --arg id ${1:?}
+  tt: tt count-paths
+
+# gen helpers
+
+- m4:
+    IEC: |
+      def iec(n):
+        def n(n): pow(10; n) as $n | . * $n | floor / $n;
+        1024 as $k | ([ while(. >= $k; . / $k) ] | length) as $l
+        | (. / pow($k; $l) | n(n) | tostring) + [ "", "K", "M", "G", "T" ][$l];
+      def iec: iec(0);
+
+# the lib
+
+- id: var
+  jq: |
+    getpath($ARGS.positional)
+  sh: |
+    <<< "$js" self -r --args "$@"
+  js:
+    epifiles:
+      node: prostrc1
+      path: /space/nfsdata/profnt2/epifiles/upload_final/epifiles
+    damoc:
+      node: prostrc1
+      path: /space/nfsdata/profnt2/ssl.damoc-tb.net/data/htdocs/code/files/files_1731959368
+    mailmerge:
+      node: prostrc1
+      path: /space2/nfsdata/proepifiles1/applisdata/mailmerge/storage/mailmerge
+    profntr1-applisdata:
+      node: prostrg1
+      path: /space/nfsdata/profntr1/applisdata
+    prostrd1-applisdata-profnt3:
+      node: prostrd1
+      path: /space/nfsdata/profnt3/applisdata/
+    tst:
+      node: localhost
+      path: Downloads
+  tt: |
+    var
+    var epifiles
+    var damoc node
+    var profntr1-applisdata path
+
+- id: conf
+  jq: del(.tst)
+  sh: var | self | yq -P
+
+- id: rem
+  sh: |
+    with-lib jqsh ME -- what=${1:?} ME:"${@:2}" | ssh $(var $1 node) bash
+  tt: |
+    rem epifiles count-dirs
+    rem damoc count-dirs
+    rem profntr1-applisdata count-dirs
+    rem tst count-dirs
+
+- id: count-paths
+  sh: locate $(var ${what:?} path) | wc -l
+  tt: |
+    rem epifiles count-paths
+    rem damoc count-paths
+    rem profntr1-applisdata count-paths
+  
+- id: count-items
+  sh: find $(var ${what:?} path) -type ${type:?} $empty | wc -l
+
+- { id: count-empty-items, sh: empty=-empty count-items }
+- { id: count-dirs, sh: type=d count-items }
+- { id: count-files, sh: type=f count-items }
+- { id: count-empty-dirs, sh: type=d count-empty-items }
+- { id: count-empty-files, sh: type=f count-empty-items }
+
+- id: with-func-name
+  sh: |
+    echo -n "${1:?}: "; ${BASH_ALIASES[$1]:-$1} "$@"
+
+- id: basic-count
+  sh: loop with-func-name count-{paths,dirs,files,empty-{dirs,files}}
+  tt: |-
+    rem epifiles basic-count | column -ts' '
+    rem damoc basic-count
+    rem profntr1-applisdata basic-count
+    rem tst basic-count
+
+- id: basic-count-as-md
+  sh: |
+    for i; do echo -e "## $i\n"; echo '```yaml'; rem $i basic-count | column -ts' '; echo -e '```\n'; done
+
+- m4:
+    SPLIT: |
+      def splitBy($n; $s): inputs / $s | [.[:$n][], (.[$n:] | join($s))] | last |= (. / ",")[0];
+      def splitBy($s): splitBy(1; $s);
+
+- id: files-stat
+  jq: |
+    SPLIT splitBy(2; " ") | map(try tonumber // .)
+  sh: |
+    cd $(var $what path); find -type f -print0 | xargs -0r stat -c '%Y %s %n' | self -nR
+  tt: |-
+    rem tst files-stat
+
+- id: auto
+  sh: mkdir -p tmp; as-lib jqsh ME > tmp/ME.sh
+
+- m4:
+    MK_HEAD: |
+      MAKEFLAGS += -Rr --warn-undefined-variables
+      SHELL != which bash
+      .SHELLFLAGS := -euo pipefail -c
+
+- id: stone
+  sh: touch tmp/stone
+
+- id: mk-files-stat
+  sh: &mk auto; <<< $mk make -f /dev/stdin BASH_ENV=tmp/ME.sh what=${1:?} "${@:2}"
+  mk: |
+    MK_HEAD«»
+    tmp/$(what)-stat.js: tmp/stone; rem $(what) files-stat | jq -s > $@
+  tt: |
+    loop mk-files-stat epifiles damoc profntr1-applisdata
+    mk-files-stat tst
+
+- id: files-file
+  jq: |
+    SPLIT splitBy(": ")
+  sh: |
+    cd $(var $what path); find -type f -print0 | xargs -0r file -N | self -nR
+  tt: |
+    rem tst files-file
+
+- id: mk-files-file
+  sh: *mk
+  mk: |
+    MK_HEAD«»
+    tmp/$(what)-file.js: tmp/stone; rem $(what) files-file | jq -s > $@
+  tt: |
+    loop mk-files-file epifiles damoc profntr1-applisdata
+    mk-files-file tst
+
+- id: stat+file
+  jq: |
+    JOIN(INDEX(first[]; last); last[]; first; last + first[-1:])
+  sh: self -sc "$@"
+  tt: |-
+    stat+file tmp/epifiles-{stat,file}.js > tmp/epifiles-stat+file.js
+
+- id: mk-stat+file
+  mk: |
+    MK_HEAD«»
+    ] := tmp/$(what)-stat+file.js
+    [ := stat file
+    [ := $([:%=tmp/$(what)-%.js)
+    $]: $[; stat+file $^ > $@
+  sh: *mk
+  tt: |
+    mk-stat+file epifiles
+    loop mk-stat+file epifiles damoc
+
+- id: date+size
+  jq: |
+    (.[0] | gmtime | [strftime("%Y", "%m", "%d")]) as [ $year, $month, $day ]
+    | .[1] as $size | { $year, $month, $day, $size }
+  tt: |-
+    < tmp/epifiles-stat+file.js date+size > tmp/epifiles-date+size.js
+
+- id: mk-date+size
+  mk: |
+    MK_HEAD«»
+    ] := tmp/${what}-date+size.js
+    [ := tmp/$(what)-stat+file.js
+    $]: $[; < $< date+size -c > $@
+  sh: *mk
+  tt: |
+    loop mk-date+size epifiles damoc
+  
+- id: type+size
+  jq: |
+    [.[-1, 1]]
+  sh: self -c
+  tt: |
+    < tmp/epifiles-stat+file.js type+size > tmp/epifiles-type+size.js
+
+- id: mk-type+size
+  mk: |
+    MK_HEAD
+    ] := tmp/$(what)-type+size.js
+    [ := tmp/$(what)-stat+file.js
+    $]: $[; < $< type+size -c > $@
+  sh: *mk
+  tt: |
+    loop mk-type+size epifiles damoc
+
+- id: fix-type+size
+  jq: select(map(. == null) | any | not)
+
+- id: by-type
+  jq: |
+    IEC
+    reduce inputs as $i ({}; .[$i[0]].size += $i[-1] | .[$i[0]].cnt += 1)
+    | to_entries | map({ type: .key} + .value) | sort_by(.cnt, .size) | reverse
+    | map_values(.size |= iec(2))
+  sh: self -n
+  tt: |
+    < tmp/epifiles-type+size.js fix-type+size | by-type 
+
+- id: types-freq
+  jq: group_by(.cnt >= $n)
+  sh: fix-type+size | by-type | self --argjson n ${1:?}
+  tt: |
+    < tmp/epifiles-type+size.js types-freq 10
+
+- id: frequent-types
+  jq: last
+  sh: types-freq ${1:?} | self
+  tt: |
+    < tmp/epifiles-type+size.js frequent-types 10 | mdtbl++ [0]
+
+- id: rare-types
+  jq: first
+  sh: types-freq ${1:?} | self
+  tt: |
+    < tmp/epifiles-type+size.js rare-types 10 | mdtbl++ [0]
+
+- id: types-as-md
+  sh: |
+    f () { echo -e "## $i $j\n"; < tmp/$i-type+size.js ME:$j-types ${1:?} | mdtbl++ [0]; echo; }
+    for i in ${@:2}; do for j in frequent rare; do f ${1:?}; done; done
+  tt: |
+    types-as-md epifiles damoc
+
+- id: by-year
+  jq: |
+    IEC
+    reduce inputs as $i ({}; .[$i.year].size += $i.size | .[$i.year].cnt += 1)
+    | to_entries | map({ year: .key} + .value) | sort_by(.year)
+    | map_values(.size |= iec(2))
+  tt: |-
+    < tmp/epifiles-date+size.js by-year | mdtbl++ [0]
+
+- id: by-year-as-md
+  sh: |
+    for i; do echo -e "## $i\n"; < tmp/$i-date+size.js by-year | mdtbl++ [0]; echo; done
+  tt: |
+    by-year-as-md epifiles damoc
+
+- id: biggest
+  jq: |
+    IEC [inputs] | sort_by(.size) | .[-$n:] | reverse[] | { year, size } | .size |= iec(2)
+  sh: |
+    self -n --argjson n ${1:?} "${@:2}"
+  tt: |-
+    < tmp/epifiles-date+size.js biggest 10 -c | mdtbl++ [0] -s
+
+- id: biggest-as-md
+  sh: |
+    n=$1; shift;
+    for i; do echo -e "## $i\n"; < tmp/$i-date+size.js biggest $n -c | mdtbl++ [0] -s; echo; done
+  tt: |
+    biggest-as-md 10 epifiles damoc
+
+- id: as-iec
+  jq: IEC .[$name] |= iec($n)
+  sh: self --arg name ${1:?} --argjson n ${2:-2}
+  tt: < tmp/NAME-date+size.js bigger-than $(<<< 2^30 bc) | as-iec total 0
+
+- id: bigger-than
+  jq: |
+    IEC [ inputs ] | map(select(.size > $n))
+    | map({ size } + { G: .size | iec })
+    | group_by(.G) | map({ size: first.G, cnt: length, total: map(.size) | add })
+    | [{ size: ">1G", cnt: map(.cnt) | add,  total: map(.total) | add }] + .
+    | .[]
+  sh: |
+    self -n --argjson n ${1:?} "${@:2}"
+  tt: |-
+    < tmp/epifiles-date+size.js bigger-than $(<<< 2^30 bc) | as-iec total 0 | mdtbl++ [0] -s
+    
+- id: bigger-than-as-md
+  sh: |
+    n=$1; shift;
+    for i; do echo -e "## $i\n"; < tmp/$i-date+size.js bigger-than $(<<< 2^30 bc) | as-iec total 0 | mdtbl++ [0] -s; echo; done
+  tt: |
+    bigger-than-as-md 1 epifiles
+

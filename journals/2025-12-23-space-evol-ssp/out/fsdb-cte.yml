@@ -1,0 +1,114 @@
+- { id: null, ns: fsdb-stat }
+- { ky: [ tt ], is: [ nv ] }
+
+- id: ddb
+  sh: |-
+    duckdb out/ssp-small.db "$@"
+
+- id: sql
+  sh: |-
+    jq ". + [\"$sql\""] "$@"
+
+- id: start
+  class: source
+  sql: |-
+    FROM \($tbl)
+  sh: |-
+    sql -n --arg tbl ${1:-fsdb}
+
+- id: merge-cte
+  jq: |-
+    def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g");
+    def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
+    [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+  sh: |-
+    self -r
+
+- id: limit
+  class: order_limit
+  sql: |-
+    SELECT * from {prev} LIMIT \($limit)
+  sh: |-
+    sql --arg limit ${1:-40}
+
+- id: order
+  class: order_limit
+  sql: |-
+    SELECT * FROM {prev} ORDER BY \($order) \($dir)
+  sh: |-
+    sql --arg order ${1:?} --arg dir ${2:-DESC}
+
+- id: sum
+  class: aggregate
+  sql: |-
+    SELECT \($group), \($sum / "," | map("SUM(\(.)) AS \(.)") | join(", ")) FROM {prev} GROUP BY \($group)
+  sh: |-
+    sql --arg group ${1:?} --arg sum ${2:-cnt,size}
+
+- id: keep
+  class: map
+  sql: |-
+    SELECT \($ARGS.positional | join(", ")) FROM {prev}
+  sh: |-
+    sql --args "$@"
+
+- id: distinct
+  class: aggregate
+  sql: |-
+    SELECT DISTINCT \($ARGS.positional | join(", ")) FROM {prev}
+  sh: |-
+    sql --args "$@"
+
+- id: count
+  class: aggregate
+  sql: |-
+    SELECT COUNT(\($count)) FROM {prev}
+  sh: |-
+    sql --arg count "$1"
+
+- id: grpcnt
+  class: aggregate
+  sql: |-
+    SELECT \($group), COUNT(*) AS cnt FROM {prev} GROUP BY \($group)
+  sh: |-
+    sql --arg group ${1:?}
+
+- id: human
+  class: map
+  sql: |-
+    SELECT *, \($ARGS.positional | map("\($func)(\(.)::BIGINT) AS h\(.)") | join(", ")) FROM {prev}
+  jq: |-
+    { "2": "format_bytes", "10": "formatReadableDecimalSize" }[$base] // halt_error(1)
+  sh: |-
+    local -A opts; local args cont; opts "$@"
+    : ${1:?}; sql --arg func $(self -n --arg base ${opts[b]:-2}) --args "${args[@]}"
+
+- id: hide
+  class: map
+  sql: |-
+    SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}
+  sh: |-
+    sql --args "$@"
+
+- id: where
+  sql: |-
+    SELECT * FROM {prev} WHERE \($ARGS.positional | join(" "))
+  sh: |-
+    sql --args "$@"
+
+- id: is
+  sh: |-
+    : ${2:?}; where $1 == "'$2'"
+
+- id: like
+  sh: |-
+    : ${2:?}; where $1 like "'$2'"
+
+- id: span
+  sql: |-
+    SELECT time_bucket(INTERVAL '\($n) \($bucket)', date) date,
+    \($group), \($sum / "," | map("SUM(\(.)) AS \(.)") | join(", ")), 
+    FROM {prev} GROUP BY all
+  sh: |-
+    local -A opts; local args cont; opts "$@"
+    sql --argjson n ${opts[n]:-1} --arg bucket ${opts[bucket]:-year} --arg group ${opts[group]:-server} --arg sum ${opts[sum]:-cnt,size}

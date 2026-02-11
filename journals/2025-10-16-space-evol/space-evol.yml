@@ -1,0 +1,223 @@
+---
+
+- m4:
+    ME: space-evol
+
+- id:
+  ns: ME
+  lv: [ jq, mk, url, sql, python ]
+
+# jqsh helpers
+
+- { id: src, sh: ME src }
+- { id: show, sh: fns ME }
+
+- id: tt
+  jq: INDEX(.[]; .id)[$id].tt
+  sh: src | self -r --arg id ${1:?}
+  tt: tt count-paths
+
+# the lib
+
+- id: var
+  js:
+    var:
+      client:
+        node: &client_node profnte1
+        path: &client_path /space/applisdata/ssp/
+      server:
+        node: &server_node prostri1
+        path: &server_path [ /space/nfsdata/, *client_node, /applisdata/ssp/ ]
+    data:
+      ssp-apicrypt:
+        what: [ *client_node, ":", *client_path, apicrypt ]
+        node: *server_node
+        path: [ *server_path, apicrypt ]
+      ssp-upload:
+        what: [ *client_node, ":", *client_path, upload ]
+        node: *server_node
+        path: [ *server_path, upload ]
+  jq: |
+    walk(if type == "array" then add else . end).data | getpath($ARGS.positional)
+  sh: |
+    <<< "$js" self -r --args "$@"
+  tt: |
+    var
+    var ssp-apicrypt
+    var ssp-apicrypt path
+
+    # overkill, keep just in case
+- id: var2
+  js:
+    var:
+      client:
+        node: profnte1
+        path: /space/applisdata/ssp/
+      server:
+        node: prostri1
+        path: [ /space/nfsdata/, [client, node], /applisdata/ssp/ ]
+    data:
+      ssp-apicrypt:
+        what: [[client, node], ":", [client, path], apicrypt]
+        node: [ server, node ]
+        path: [[server, path], apicrypt ]
+      ssp-upload:
+        what: [[client, node], ":", [client, path], upload]
+        node: [ server, node ]
+        path: [[server, path], upload ]
+  jq: |
+    def var($var; $data):
+      def var($var; $data):
+        if type == "array"
+        then
+          if (map(type) | unique | first) == "string"
+          then
+            . as $path | $var | getpath($path) // $path
+            | if type == "array" then add end
+          end
+        end;
+      $data | walk(var($var; $data));
+    .var = var(.var; .var) | var(.var; .data)
+    | getpath($ARGS.positional)
+  sh: |
+    <<< "$js" self -r --args "$@"
+  tt: |
+    var2
+    var2 apicrypt
+    var2 apicrypt path
+
+- id: conf
+  jq: del(.tst)
+  sh: var | self | yq -P
+
+- id: rem
+  sh: |
+    with-lib jqsh ME -- what=${1:?} ME:"${@:2}" | ssh $(var $1 node) bash
+  tt: |
+    rem apicrypt files-stat
+
+- m4:
+    SPLIT: |
+      def splitBy($n; $s): inputs / $s | [.[:$n][], (.[$n:] | join($s))] | last |= (. / ",")[0];
+      def splitBy($s): splitBy(1; $s);
+
+- id: files-stat
+  jq: |
+    SPLIT splitBy(2; " ") | map(try tonumber // .)
+  sh: |
+    local cd=$(var $what path)
+    cd ${cd:?} && find -type f -print0 | xargs -0r stat -c '%Y %s %n' | self -nRc
+  tt: |-
+    rem ssp-apicrypt files-stat
+
+- id: auto
+  sh: mkdir -p tmp; as-lib jqsh ME > tmp/ME.sh
+
+- m4:
+    MK_HEAD: |
+      MAKEFLAGS += -Rr --warn-undefined-variables
+      SHELL != which bash
+      .SHELLFLAGS := -euo pipefail -c
+
+- id: stone
+  sh: touch tmp/stone
+
+- id: mk-files-stat
+  sh: &mk auto; <<< $mk make -f /dev/stdin BASH_ENV=tmp/ME.sh what=${1:?} "${@:2}"
+  mk: |
+    MK_HEAD«»
+    tmp/$(what)-stat.js.gz: tmp/stone; rem $(what) files-stat | gzip > $@
+  tt: |
+    mk-files-stat ssp-apicrypt
+
+- id: install-duckdb
+  url: |
+    https://github.com/duckdb/duckdb/releases/download/v1.4.1/duckdb_cli-linux-amd64.gz
+  sh: |
+    curl -sL $url | zcat | install /dev/stdin /usr/local/bin/duckdb
+
+- id: create-file-stat-db
+  sql: |
+    CREATE TABLE file_stats AS
+    SELECT
+        data[0]::BIGINT AS unix_timestamp,
+        data[1]::BIGINT AS size_bytes,
+        data[2]::VARCHAR AS file_path
+    FROM read_json_auto('/dev/stdin', columns={'data': 'JSON'});
+  sh: |
+    < tmp/${1:?}-stat.js.gz zcat | duckdb tmp/$1-stat.db -c "$sql"
+  tt: |
+    create-file-stat-db ssp-apicrypt
+
+- id: size-by-year
+  sql: |
+    SELECT
+        EXTRACT(year FROM to_timestamp(unix_timestamp)) AS year,
+        COUNT(*) AS number_of_files,
+        -- Manually format the size after casting the sum to a float
+        ROUND(SUM(size_bytes)::DOUBLE / (1024*1024*1024), 2) || ' GB' AS total_size_added
+    FROM file_stats
+    GROUP BY year
+    ORDER BY year;
+  sh: |
+    duckdb tmp/${1:?}-stat.db -markdown -c "$sql"
+  tt: |
+    size-by-year ssp-apicrypt
+
+- id: size-by-period
+  jq: |
+    "SELECT
+        strftime(to_timestamp(unix_timestamp), '\($period)') AS period,
+        COUNT(*) AS cnt,
+        ROUND(SUM(size_bytes)::DOUBLE / POWER(1024, \($power)), 2) AS size
+    FROM file_stats
+    GROUP BY period
+    ORDER BY period;"
+  sh: |
+    self -nr --arg period $period --arg power $power | duckdb tmp/${1:?}-stat.db -${fmt:-markdown}
+  tt: |
+    period=%Y power=3 size-by-period ssp-upload
+    period=%H power=3 size-by-period ssp-upload
+    period=%Y-%m power=2 size-by-period ssp-upload
+
+- id: plot-size-by-period
+  jq: |
+    "
+    import sys
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    
+    # Read CSV data from standard input
+    df = pd.read_csv(sys.stdin)
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(10, 5.5))
+    
+    # Plot bars for number_of_files
+    ax1.bar(df['period'], df['cnt'], color='skyblue', label='cnt')
+    ax1.set_xlabel('period')
+    ax1.set_ylabel('cnt')
+    ax1.tick_params(axis='y')
+    
+    # Create a second y-axis for the size
+    ax2 = ax1.twinx()
+    ax2.plot(df['period'], df['size'], color='red', marker='o', label='size')
+    ax2.set_ylabel('size')
+    ax2.tick_params(axis='y')
+    
+    # Final Touches
+    plt.title('\($set) by \($period) U=K^\($power)')
+    fig.tight_layout()
+    plt.legend()
+    # Save the output file
+    plt.savefig('\($set)-by-\($period).png')
+    "
+  sh: |
+    local title='Cnt and size added per period'
+    : ${2:?}; size-by-period $1 | python -c "$(self -nRr --arg set $1 --arg period $2 --arg power $power)"
+  tt: |
+    period=%Y power=3 fmt=csv plot-size-by-period ssp-upload year
+    period=%Y power=3 fmt=csv plot-size-by-period ssp-apicrypt year
+    #
+    period=%H power=3 fmt=csv plot-size-by-period ssp-upload hour
+    period=%H power=3 fmt=csv plot-size-by-period ssp-apicrypt hour

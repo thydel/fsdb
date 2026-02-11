@@ -1,0 +1,243 @@
+---
+
+- id: install-duckdb
+  ns: dep
+  lv: [ url ]
+  url: |
+    https://github.com/duckdb/duckdb/releases/download/v1.4.1/duckdb_cli-linux-amd64.gz
+  sh: |
+    curl -sL $url | zcat | install /dev/stdin /usr/local/bin/duckdb
+---
+
+- m4:
+    ME: fsdb
+    DATA: data.yml
+
+- id:
+  ns: ME
+  lv: [ jq, sql, python ]
+
+# jqsh helpers
+
+- { id: src, sh: ME src }
+- { id: show, sh: fns ME }
+
+- id: tt
+  jq: INDEX(.[]; .id)[$id].tt
+  sh: src | self -r --arg id ${1:?}
+  tt: |-
+    tt size-by-period
+    tt create-files-stat-db
+
+# the lib
+
+- id: var
+  jq: |
+    getpath($ARGS.positional)
+  sh: |
+    < DATA ejq | self -r --args "$@"
+  tt: |-
+    var
+    var mailmerge
+    var mailmerge node
+    var ssp upload path
+
+- m4:
+    SPLIT: |
+      def splitBy($n; $s): inputs / $s | [.[:$n][], (.[$n:] | join($s))] | last |= (. / ",")[0];
+      def splitBy($s): splitBy(1; $s);
+
+- id: files-stat
+  jq: |
+    SPLIT splitBy(2; " ") | map(try tonumber // .)
+  sh: |
+    cd ${1:?} && find -type f -print0 | xargs -0r stat -c '%Y %s %n' | self -nRc
+
+- id: get-files-stat
+  jq: |
+    $ARGS.positional | join("-")
+  sh: |
+    : ${1:?}; with-lib jqsh ME -- files-stat $(var "$@" path) |
+    ssh $(var "$@" node) bash | gzip > tmp/$(self -nr --args "$@")-stat.js.gz
+  tt: |-
+    get-files-stat mailmerge
+    get-files-stat ssp apicrypt
+    get-files-stat ssp upload
+
+- id: create-files-stat-db
+  sql: |
+    CREATE TABLE stat AS
+    SELECT
+        data[0]::BIGINT AS uts,
+        data[1]::BIGINT AS size,
+        data[2]::VARCHAR AS path
+    FROM read_json_auto('/dev/stdin', columns={'data': 'JSON'});
+  jq: |
+    $ARGS.positional | join("-")
+  sh: |
+    : ${1:?}; local what=$(self -nr --args "$@")
+    < tmp/$what-stat.js.gz zcat | duckdb tmp/$what-stat.db -c "$sql"
+  tt: |-
+    create-files-stat-db mailmerge
+    create-files-stat-db ssp apicrypt
+    create-files-stat-db ssp upload
+
+- id: size-by-period
+  jq: |
+    "SELECT
+        strftime(to_timestamp(uts), '\($period)') AS period,
+        COUNT(*) AS cnt,
+        ROUND(SUM(size)::DOUBLE / POWER(1024, \($power)), 2) AS size
+    FROM stat
+    GROUP BY period
+    ORDER BY period;"
+  sh: |
+    self -nr --arg period $period --arg power $power |
+    duckdb tmp/$(printf "%s\n" "$@" | paste -sd-)-stat.db -${fmt:-markdown}
+  tt: |-
+    period=%Y power=3 size-by-period mailmerge
+    period=%H power=3 size-by-period mailmerge
+    period=%Y-%m power=2 size-by-period mailmerge
+    period=%Y power=3 size-by-period ssp apicrypt
+    period=%Y power=3 size-by-period ssp upload
+
+- id: plot-size-by-period
+  jq: |
+    "
+    import sys
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    
+    # Read CSV data from standard input
+    df = pd.read_csv(sys.stdin)
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(10, 5.5))
+    
+    # Plot bars for number_of_files
+    ax1.bar(df['period'], df['cnt'], color='skyblue', label='cnt')
+    ax1.set_xlabel('period')
+    ax1.set_ylabel('cnt')
+    ax1.tick_params(axis='y')
+    
+    # Create a second y-axis for the size
+    ax2 = ax1.twinx()
+    ax2.plot(df['period'], df['size'], color='red', marker='o', label='size')
+    ax2.set_ylabel('size')
+    ax2.tick_params(axis='y')
+    
+    # Final Touches
+    plt.title('\($set) by \($period) U=K^\($power)')
+    fig.tight_layout()
+    plt.legend()
+    # Save the output file
+    plt.savefig('\($set)-by-\($period).png')
+    "
+  sh: |
+    local title='Cnt and size added per period'
+    : ${2:?}; size-by-period $1 | python -c "$(self -nRr --arg set $1 --arg period $2 --arg power $power)"
+  tt: |
+    period=%Y power=3 fmt=csv plot-size-by-period mailmerge year
+    period=%H power=3 fmt=csv plot-size-by-period mailmerge hour
+    period=%Y power=3 fmt=csv plot-size-by-period ssp-apicrypt year
+
+- id: cumulative-size-by-period
+  jq: |
+    "
+    WITH period_data AS (
+        -- First, aggregate data per period within the date range
+        SELECT
+            strftime(to_timestamp(uts), '\($period)') AS period,
+            COUNT(*) AS period_cnt,
+            SUM(size) AS period_size
+        FROM stat
+        WHERE to_timestamp(uts) >= strptime('\($start)', '%Y-%m-%d')
+          AND to_timestamp(uts) < (strptime('\($end)', '%Y-%m-%d') + INTERVAL 1 DAY)
+        GROUP BY period
+    )
+    -- Now, calculate the cumulative sum over the periods
+    SELECT
+        period,
+        SUM(period_cnt) OVER (ORDER BY period) AS cnt,
+        ROUND(
+            SUM(period_size) OVER (ORDER BY period)::DOUBLE / POWER(1024, \($power)), 2
+        ) AS size
+    FROM period_data
+    ORDER BY period;
+    "
+  sh: |
+    # $1: dataset (e.g., mailmerge)
+    # env: period (e.g., '%Y-%m'), power (e.g., 3), start (e.g., '2023-01-01'), end (e.g., '2023-12-31')
+    : ${start:?Required}; : ${end:?Required}; : ${period:?Required}; : ${power:?Required}
+    self -nr --arg period "$period" --arg power "$power" --arg start "$start" --arg end "$end" |
+    duckdb tmp/$(printf "%s\n" "$@" | paste -sd-)-stat.db -${fmt:-markdown}
+  tt: |-
+    # Test: Cumulative by month for 2023 (GiB)
+    period=%Y-%m power=3 start=2023-01-01 end=2023-12-31 cumulative-size-by-period mailmerge
+    # Test: Cumulative by week for 2024 (MiB)
+    period=%Y-%W power=2 start=2024-01-01 end=2024-12-31 cumulative-size-by-period mailmerge
+    period=%Y power=3 start=2020-01-01 end=2025-12-31 cumulative-size-by-period mailmerge
+
+- id: plot-cumulative-size
+  jq: |
+    "
+    import sys
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    
+    # Read CSV data from standard input
+    df = pd.read_csv(sys.stdin)
+    
+    # Ensure 'period' is treated as a string for plotting
+    df['period'] = df['period'].astype(str)
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Plot bars for cumulative number_of_files
+    ax1.bar(df['period'], df['cnt'], color='skyblue', label='Cumulative cnt')
+    ax1.set_xlabel('Period (\($period))')
+    ax1.set_ylabel('Cumulative Count (cnt)')
+    ax1.tick_params(axis='y')
+    
+    # Rotate x-axis labels if there are many periods
+    if len(df['period']) > 25:
+        ax1.tick_params(axis='x', rotation=75)
+    
+    # Create a second y-axis for the cumulative size
+    ax2 = ax1.twinx()
+    ax2.plot(df['period'], df['size'], color='red', marker='o', linestyle='-', label='Cumulative size')
+    ax2.set_ylabel('Cumulative Size (U=K^\($power)')
+    ax2.tick_params(axis='y')
+    
+    # Combine legends from both axes
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc='upper left')
+    
+    # Final Touches
+    plt.title('Cumulative Cnt & Size for \($set) (\($start) to \($end))')
+    fig.tight_layout()
+    
+    # Save the output file
+    plt.savefig('\($set)-cumulative-by-\($period_name).png')
+    "
+  sh: |-
+    # $1: dataset (e.g., mailmerge)
+    # $2: period_name (e.g., 'month', 'week' for the output file)
+    # env: period (strftime), power, start, end
+    : ${period:?Required}; : ${power:?Required}; : ${start:?Required}; : ${end:?Required}
+    local period_name=${2:?period_name_required}
+    
+    # Call the new data script, forcing CSV output for python
+    fmt=csv cumulative-size-by-period $1 |
+    python -c "$(self -nRr --arg set $1 --arg period "$period" --arg period_name "$period_name" --arg power "$power" --arg start "$start" --arg end "$end")"
+  tt: |
+    # Test: Plot cumulative by month for 2023
+    period=%Y-%m power=3 start=2023-01-01 end=2023-12-31 plot-cumulative-size mailmerge month
+    # Test: Plot cumulative by week for 2023
+    period=%Y-%W power=3 start=2023-01-01 end=2023-12-31 plot-cumulative-size mailmerge week
+    # Test: Plot cumulative by day for Q1 2024
+    period=%Y-%m-%d power=2 start=2024-01-01 end=2024-03-31 plot-cumulative-size mailmerge day
+    period=%Y-%m power=2 start=2020-01-01 end=2025-12-31 plot-cumulative-size mailmerge 2020-2025-month
+    period=%Y-%m power=2 start=2020-01-01 end=2025-12-31 plot-cumulative-size ssp-apicrypt 2020-2025-month

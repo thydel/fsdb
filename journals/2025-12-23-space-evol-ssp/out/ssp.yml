@@ -1,0 +1,169 @@
+- { id: null, ns: ssp }
+- { ky: [ tt ], is: [ nv ] }
+
+- id: server-path
+  sh: |-
+    readlink ${1:-/space/applisdata} | xargs readlink
+  tt: |-
+    with ssp:server-path | fn-ansible -l profnt[epr]1
+
+- id: mk-conf
+  jq: |-
+    def item: (.stdout_lines[0] / "/") as $path | { client: .node, server: $path[2], path: ([""] + $path[3:] | join("/")) };
+    INDEX(map(item)[]; .client)
+  tt: |-
+    with ssp:server-path | fn-ansible -l profnt[epr]1 | mk-conf > out/conf.js
+
+- id: stat-args
+  js: |-
+    { "Y": uts, s: size, f: mode, h: nlinks, u: uid, g: gid, U: uname, G: gname }
+  jq: |-
+    . / "" | map("%" + . | if . | test("[fUG]") then @json else . end) | join(",") | "[\(.)]"
+  sh: |-
+    <<< ${1:-Ysi} self -Rr --argjson js "$js"
+  tt: |-
+    stat-args YsifhUG
+
+- id: files-stat
+  perl: |-
+    BEGIN { $j = JSON::PP->new->utf8 }
+    chomp;
+    @s = lstat($_);
+    next unless @s;
+    print $j->encode([$s[1], $s[2], $_]), "\n"
+  sh: |-
+    (cd ${1:?} && find -type f -print0 |
+    if [[ "$2" == imn ]]; then perl -MJSON::PP -0 -ne "$perl"; else xargs -0r stat -c "$(stat-args $2)"; fi)
+  tt: |-
+    files-stat /usr/share Ysfihug
+    files-stat /usr/share imn
+    files-stat /usr/share
+
+- id: var
+  jq: |-
+    getpath($var / ".")
+  sh: |-
+    < out/conf.js jq "$jq" -r --arg var ${1:?}
+
+- id: get-files-stat
+  sh: |-
+    : ${1:?}; local a=${2:-Ysi}; with-lib ssp -- files-stat $(var $1.path) $a |
+    ssh $(var $1.server) bash | gzip > tmp/$1-$a-stat.js.gz
+  tt: |-
+    for i in profnt{e,r,p}1; do get-files-stat $i; get-files-stat $i imn; done
+
+- id: ingest-stat
+  sql: |-
+    CREATE TABLE fsdb AS 
+    SELECT 
+        (imn.json->0)::BIGINT inode,
+        to_timestamp((ysi.json->0)::BIGINT) uts,
+        (ysi.json->1)::BIGINT size,
+        list_filter(string_split(imn.json->>2, '/'), x -> x != '.') path
+    FROM read_json_auto('\($what)-imn-stat.js.gz') imn
+    JOIN read_json_auto('\($what)-Ysi-stat.js.gz') ysi 
+      ON (imn.json->0)::BIGINT = (ysi.json->2)::BIGINT
+  sh: |-
+    (cd tmp; jq -nr "\"$sql\"" "" --arg what ${1:?} | duckdb $1.db)
+  tt: |-
+    for i in profnt{e,r,p}1; do ingest-stat $i; done
+
+- id: reduce-stat
+  sql: |-
+    ATTACH '\($src).db' AS src;
+    CREATE TABLE fsdb AS
+    SELECT 
+        time_bucket(INTERVAL '1 hour', uts) date,
+        path[1 : len(path)-1] path,
+        count(*) cnt,
+        sum(size) size,
+        min(size) min,
+        max(size) max,
+        avg(size) mean
+    FROM src.fsdb
+    GROUP BY all ORDER BY date
+  sh: |-
+    local ddb=$1-small.db
+    (cd tmp; rm -f $ddb; jq -nr "\"$sql\"" "" --arg src ${1:?} | duckdb $ddb)
+  tt: |-
+    for i in profnt{e,r,p}1; do reduce-stat $i; done
+    reduce-stat profnte1
+
+- id: merge-db
+  jq: |-
+    def tbl: (. / "-")[0];
+    $ARGS.positional as $dbs
+    | ($dbs[] | "ATTACH '\(.).db' AS \(tbl);")
+    , "CREATE TABLE fsdb AS " + ($dbs | map("SELECT *, '\(tbl)' AS server FROM \(tbl).fsdb") | join(" UNION ALL "))
+  sh: |-
+    self -nr --args "$@"
+  tt: |-
+    (cd tmp; merge-db profnt{e,p,r}1 | duckdb ssp.db)
+    (cd out; merge-db profnt-small{e,p,r}1 | duckdb ssp-small.db)
+
+- id: table-info
+  sql: |-
+    SELECT name AS column_name, type AS column_type FROM pragma_table_info('\($table)')
+  sh: |-
+    jq -nr "\"$sql\"" "" --arg table ${1:-fsdb}
+  tt: |-
+    table-info | duckdb tmp/ssp.db --box
+
+- id: full-db-basic-facts
+  sql: |-
+    SELECT
+      STRFTIME(min(uts), '%Y-%m-%d') AS start,
+      STRFTIME(max(uts), '%Y-%m-%d') AS end,
+      count(DISTINCT server) AS servers,
+      format_bytes(count(*)::BIGINT) AS files,
+      format_bytes(sum(size)::BIGINT) AS size
+    FROM fsdb;
+    
+  sh: |-
+    jq -nr "\"$sql\"" ""
+  tt: |-
+    full-db-basic-facts | duckdb tmp/ssp.db --box
+
+- id: small-db-basic-facts
+  sql: |-
+    SELECT
+      STRFTIME(min(date), '%Y-%m-%d') AS start,
+      STRFTIME(max(date), '%Y-%m-%d') AS end,
+      format_bytes(count(*)::BIGINT) AS rows,
+      count(DISTINCT server) AS servers,
+      format_bytes(count(DISTINCT path)) AS dirs,
+      format_bytes(sum(cnt)::BIGINT) AS files,
+      format_bytes(sum(size)::BIGINT) AS size
+    FROM fsdb;
+  sh: |-
+    jq -nr "\"$sql\"" ""
+  tt: |-
+    small-db-basic-facts | duckdb out/ssp-small.db --box
+
+- id: query-stat
+  sql: |-
+    SELECT 
+        \($time) as time,
+        path[1:\($depth)] as depth,
+        sum(cnt) as files,
+        sum(size) as bytes,
+        min(min) as min_size,
+        max(max) as max_size,
+        sum(size) / sum(cnt) as avg_size
+    FROM fsdb
+    GROUP BY all
+    ORDER BY time, depth
+  sh: |-
+    local depth="${2:-99}"       # Default to deep path
+    local time="${3:-date}" # Default to existing hourly timestamp
+    
+    jq -nr "\"$sql\"" "" --arg depth "$depth" --arg time "$time" | duckdb out/ssp-small.db
+  tt: |-
+    day="time_bucket(INTERVAL '1 day', date)"
+    year="time_bucket(INTERVAL '1 year', date)"
+    hour='hour(date)'
+    dow='dayofweek(date)'
+    query-stat profnte1 2 "$day"
+    query-stat profnte1 3 "$year"
+    query-stat profnte1 1 "$hour"
+    query-stat profnte1 1 "$dow"
