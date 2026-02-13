@@ -4,8 +4,9 @@ echo '$table-of-contents$' > tmp/toc.md
 -->
 
 -   [FSDB project configuration](#fsdb-project-configuration)
--   [Project overview](#project-overview)
+    -   [Project overview](#project-overview)
     -   [Project steps](#project-steps)
+    -   [Used skills](#used-skills)
     -   [Key tools & technologies](#key-tools--technologies)
         -   [Internal references](#internal-references)
         -   [External references](#external-references)
@@ -25,6 +26,17 @@ bash-based exploration pipelines, informed by experimental POCs in the
 - [ ] Use `baj-expert` skill to build [baj.md][]
 - [ ] Use `journal-reader` skill to build [journals.md][]
 - [ ] TODO by user
+
+## Used skills
+
+<!--
+ls skills/*/*.md | jq -Rr '"[\((./"/")[1])]: \(.)"'
+-->
+
+[baj-expert]: skills/baj-expert/SKILL.md
+[journal-reader]: skills/journal-reader/SKILL.md
+[md-formatter]: skills/md-formatter/SKILL.md
+[md-formatting]: skills/md-formatting/SKILL.md
 
 ## Key tools & technologies
 
