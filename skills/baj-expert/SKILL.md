@@ -45,4 +45,4 @@ either as `yaml` or `Markdown` source files
 - You redact and amend when new facts appears a reference documents in
    `reports/baj.md`
 - The document role is to make explicit the expert rules you use to
-  build baj libs
+  build `baj` libs
