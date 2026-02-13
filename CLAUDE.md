@@ -30,8 +30,13 @@ bash-based exploration pipelines, informed by experimental POCs in the
 ## Used skills
 
 <!--
-ls skills/*/*.md | jq -Rr '"[\((./"/")[1])]: \(.)"'
+ls skills/*/*.md | jq -Rr '(./"/")[1] as $n | ["- [\($n)][]", "[\($n)]: \(.)"]' | jq -sr transpose[][]
 -->
+
+- [baj-expert][]
+- [journal-reader][]
+- [md-formatter][]
+- [md-formatting][]
 
 [baj-expert]: skills/baj-expert/SKILL.md
 [journal-reader]: skills/journal-reader/SKILL.md
