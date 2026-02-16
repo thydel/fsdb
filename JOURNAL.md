@@ -1,3 +1,9 @@
+# Context7
+
+```bash
+claude mcp add --transport http context7 https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY: $(pass perso/context7)"
+```
+
 # Prompt for chat session
 
 When presented with a complex task, do not attempt to solve it
