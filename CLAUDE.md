@@ -23,9 +23,26 @@ bash-based exploration pipelines, informed by experimental POCs in the
 
 ## Project steps
 
-- [ ] Use `baj-expert` skill to build [baj.md][]
-- [ ] Use `journal-reader` skill to build [journals.md][]
-- [ ] TODO by user
+- [X] Use `baj-expert` skill to build [baj.md][]
+- [X] Use `journal-reader` skill to build [journals.md][]
+- [ ] See CTE
+
+## Steps
+
+### Rethink CTE list
+
+- Starting [journals.md][] propose a set of primitive CTE component
+  designed to help analysis of FSDB DB
+- Focus on composability and expressivity
+- Allow various DB col name via argument passing (.e.g timestamp is
+  `date` or `TS`, file is `path` or `file`)
+- Use a channel to propagate arguments (a CTE is `[{ args: {}, cte: SQL_CTE }]` instead of `[SQL_CTE]`
+
+- Example
+  - last/first year, 2 week, day, ...
+  - start/end 2025-01, 2025-01-15, ...
+  - span day, 4 hour, ...
+  - items 100
 
 ## Used skills
 
