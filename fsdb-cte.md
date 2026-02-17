@@ -266,6 +266,31 @@ SELECT \($ARGS.positional | join(", ")) FROM {prev}
 sql --args "$@"
 ```
 
+## id as
+
+- Alias an expression as a new column
+- Use before `span`/`growth` when grouping or partitioning by
+  expressions (e.g. `path[1]`) that won't survive as column names
+  across CTE boundaries
+
+```yml
+class: map
+```
+
+```sql
+SELECT *, \($ARGS.positional[0]) AS \($ARGS.positional[1]) FROM {prev}
+```
+
+```bash
+: ${2:?}; sql --args "$@"
+```
+
+### Example
+
+```bash
+start | as path[1] site | span --group=site month | growth size site | merge-cte
+```
+
 ## id hide
 
 - Exclusion: remove selected columns

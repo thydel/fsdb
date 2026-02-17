@@ -81,6 +81,13 @@
   sh: |-
     sql --args "$@"
 
+- id: as
+  class: map
+  sql: |-
+    SELECT *, \($ARGS.positional[0]) AS \($ARGS.positional[1]) FROM {prev}
+  sh: |-
+    : ${2:?}; sql --args "$@"
+
 - id: hide
   class: map
   sql: |-
