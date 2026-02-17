@@ -44,6 +44,36 @@ bash-based exploration pipelines, informed by experimental POCs in the
   - span day, 4 hour, ...
   - items 100
 
+## Howto test
+
+```bash
+source baj/cmd/baj.sh
+source baj/cmd/parsarg.sh
+load out/fsdb-cte.yml
+```
+
+```console
+thy@tdews1-256g:~/usr/hub/work/claude/fsdb$ ids fsdb | fmt
+ddb sql start merge-cte where is like last first since until keep hide
+rename human sep pct sum count grpcnt distinct span growth acc order
+items chain fmt-auto
+```
+
+## Available DB to test
+
+```console
+thy@tdews1-256g:~/usr/hub/work/claude/fsdb$ duckdb tmp/prostrc1-space-nfsdata-small.db "select * from fsdb limit 4"
+┌──────────────────────────┬──────────────────────────────────────────────────────────────────────────┬───────┬─────────┬─────────┬─────────┬────────────────────┐
+│           date           │                                   path                                   │  cnt  │  size   │   min   │   max   │        mean        │
+│ timestamp with time zone │                                varchar[]                                 │ int64 │ int128  │  int64  │  int64  │       double       │
+├──────────────────────────┼──────────────────────────────────────────────────────────────────────────┼───────┼─────────┼─────────┼─────────┼────────────────────┤
+│ 2014-07-15 09:00:00+02   │ [profnt2, ssl.damoc-tb.net, data, htdocs, code, files, files_1731959368] │     2 │ 3305169 │ 1650466 │ 1654703 │          1652584.5 │
+│ 2014-07-15 10:00:00+02   │ [profnt2, ssl.damoc-tb.net, data, htdocs, code, files, files_1731959368] │     3 │  365008 │   44544 │  247760 │ 121669.33333333333 │
+│ 2014-07-15 11:00:00+02   │ [profnt2, ssl.damoc-tb.net, data, htdocs, code, files, files_1731959368] │     5 │ 5243931 │   44544 │ 1650557 │          1048786.2 │
+│ 2014-07-15 12:00:00+02   │ [profnt2, ssl.damoc-tb.net, data, htdocs, code, files, files_1731959368] │     1 │ 1650657 │ 1650657 │ 1650657 │          1650657.0 │
+└──────────────────────────┴──────────────────────────────────────────────────────────────────────────┴───────┴─────────┴─────────┴─────────┴────────────────────┘
+```
+
 ## Used skills
 
 <!--

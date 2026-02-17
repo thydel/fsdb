@@ -1,0 +1,7 @@
+- { id: null, ns: fsdb }
+
+- id: latest-growth
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local n=${args[0]:-6} unit=${args[1]:-month}; local bucket=${opts[b]:-$unit}
+    start | last $n $unit | span $bucket | growth size | pct size_rate | chain acc size size_diff | hide prev | order date asc

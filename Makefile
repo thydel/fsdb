@@ -17,7 +17,7 @@ install = install --backup=t /dev/stdin $@
 
 mdq != type -p mdq.sh
 
-main := fsdb-build fsdb-cte
+main := fsdb-build fsdb-cte fsdb-pipes
 main: phony $(main:%=out/%.yml)
 out/%.yml: %.md $(mdq) | out; < $< m4 -P | $(lastword $^) md2yml | $(install)
 

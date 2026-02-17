@@ -2,7 +2,15 @@
 
 # What is this file
 
-- A minimal starting point for the refactoring of `fsdb`
+- A CTE operator library for building *file system data base* (FSDB)
+  SQL queries using pipeline of *common table expression* (CTE)
+- Uses a **channel format** where each element carries both args and
+  SQL: `{a: {ts, file, tbl, vals, part}, q: SQL}`
+- See [Hierarchical and recursive queries in SQL][]
+
+[Hierarchical and recursive queries in SQL]:
+    https://en.wikipedia.org/wiki/Hierarchical_and_recursive_queries_in_SQL
+    "wikipedia.org"
 
 # raw header
 
@@ -15,7 +23,7 @@ m4_define(DB,tmp/nfsdata-small.db)
 - { id: null, ns: ME }
 ```
 
-# Macros for some default values
+# Macros
 
 ```m4
 m4_define(DB,out/mailmerge-small.db)
@@ -33,160 +41,218 @@ m4_define(PARSARG,«local -A opts; local args cont; parsarg "$«@»"»)
 duckdb DB "$@"
 ```
 
-# A CTE lib for FSDB query
+# Channel infrastructure
 
-- A lib to build *file system data base* (FSDB) SQL queries using
-  pipeline of *common table expression* (CTE) pipeline (See
-  [Hierarchical and recursive queries in SQL][])
+- Each pipeline element is `{a: ARGS, q: SQL}` where `a` propagates
+  column name aliases through the pipe
 
-- See [cte-class.md][] for the meaning of `class` field of CTE
+## id sql
 
-[Hierarchical and recursive queries in SQL]:
-    https://en.wikipedia.org/wiki/Hierarchical_and_recursive_queries_in_SQL
-    "wikipedia.org"
-
-[cte-class.md]: cte-class.md "sibling file"
-
-## Use `jq` string template for SQL CTE components
-
-- A CTE is a `jq` string template that can use interpolation to inject
-  CTE parameter
-
-- A CTE pipe will construct an array of SQL parts that will be chained
-  as CTE using `{prev}` as a pattern to be replaced by the ref of the
-  previoux CTE in the pipe.
-
-### id sql
+- Core helper: wraps SQL string into a channel element, propagating
+  args from the previous element
+- Inside jq string templates, `$_a.ts`, `$_a.file`, `$_a.vals`,
+  `$_a.part` are available for column name interpolation
 
 ```bash
-jq ". + [\"$sql\""] "$@"
-```
-
-### Alternative macro
-
-```m4
-m4_define(SQL,jq -nr "\"$sql\"" "$«@»")
+jq '((.[-1].a) // {}) as $_a | . + [{a: $_a, q: '"\"$sql\""'}]' "$@"
 ```
 
 ## id start
 
-- First part of CTE pipe
+- First element of a CTE pipe, initializes channel args
+- Defaults: `ts=date`, `file=path`, `tbl=fsdb`, `vals=cnt,size`,
+  `part=server`
 
 ```yml
 class: source
 ```
 
-```sql
-FROM \($tbl)
+```jq
+{ ts: ($ts // "date"), file: ($file // "path"), tbl: ($tbl // "fsdb"),
+  vals: ($vals // "cnt,size"), part: ($part // "server") } as $a
+| [{ a: $a, q: "FROM \($a.tbl)" }]
 ```
 
 ```bash
-sql -n --arg tbl ${1:-TBL}
+PARSARG
+self -n \
+  --arg ts "${opts[ts]:-date}" \
+  --arg file "${opts[file]:-path}" \
+  --arg tbl "${args[0]:-TBL}" \
+  --arg vals "${opts[vals]:-cnt,size}" \
+  --arg part "${opts[part]:-server}"
 ```
 
 ## id merge-cte
 
-- Merge an array of CTE replacing `{prev}` string with `step` + index
-  of previous CTE
+- Assembles a channel array into final SQL
+- Extracts `.q` from each element, chains as WITH ... CTE
 
 ```jq
 def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g");
 def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
-[ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
+map(.q)
+| [ "WITH step0 AS (\(first))" ] + ctes | join(",\n") + "\nSELECT * FROM step\(length - 1)"
 ```
 
 ```bash
 self -r
 ```
 
-# Basics CTE
-
-> [!NOTE]
->
-> - All CTE will apply their action on the result of previous CTE
-> - All CTE pipe starts with a special `start` CTE
-
-## Limit the number of entries
-
-### id limit
-
-```yml
-class: order_limit
-```
-
-```sql
-SELECT * from {prev} LIMIT \($limit)
-```
-
-```bash
-sql --arg limit ${1:-40}
-```
-
 ### Example
 
 ```bash
-start | limit | merge-cte
+start | merge-cte
 ```
 
 - Will produce
 
 ```sql
-WITH step0 AS (FROM fsdb),
-step1 AS (SELECT * from step0 LIMIT 40)
-SELECT * FROM step1
+WITH step0 AS (FROM fsdb)
+SELECT * FROM step0
 ```
 
-## Sort entries
+# Filter operators
 
-### id order
+## id where
 
-```yml
-class: order_limit
-```
+- Generic SQL WHERE clause
 
 ```sql
-SELECT * FROM {prev} ORDER BY \($order) \($dir)
+SELECT * FROM {prev} WHERE \($ARGS.positional | join(" "))
 ```
 
 ```bash
-sql --arg order ${1:?} --arg dir ${2:-DESC}
-```
-
-## Sum over grouped cols
-
-### id sum
-
-```yml
-class: aggregate
-```
-
-```sql
-SELECT \($group), \($sum / "," | map("SUM(\(.)) AS \(.)") | join(", ")) FROM {prev} GROUP BY \($group)
-```
-
-```bash
-sql --arg group ${1:?} --arg sum ${2:-cnt,size}
+sql --args "$@"
 ```
 
 ### Example
 
 ```bash
-start | sum server size,cnt | merge-cte | ddb -box
+start | where size == 0 | count | merge-cte | ddb -line
 ```
 
-```txt
-┌──────────┬──────────────┬─────────┐
-│  server  │     size     │   cnt   │
-├──────────┼──────────────┼─────────┤
-│ profntp1 │ 131249243554 │ 797486  │
-│ profntr1 │ 523076872829 │ 2062966 │
-│ profnte1 │ 655727727112 │ 2022817 │
-└──────────┴──────────────┴─────────┘
+## id is
+
+- Equality filter shorthand
+
+```bash
+: ${2:?}; where $1 = "'$2'"
 ```
 
-## Keep selected cols only
+### Example
 
-### id keep
+```bash
+start | is server profntr1 | sum path[1] | order size | merge-cte | ddb -box
+```
+
+## id like
+
+- LIKE pattern filter
+
+```bash
+: ${2:?}; where $1 like "'$2'"
+```
+
+### Example
+
+```bash
+start | like path[1] %pf% | sum server,path[1] | order size | merge-cte | ddb -box
+```
+
+## id last
+
+- Filter rows relative to now (most recent N units)
+
+```yml
+class: filter
+```
+
+```sql
+SELECT * FROM {prev} WHERE \($_a.ts) >= now() - INTERVAL \($n) \($unit)
+```
+
+```bash
+sql --arg n ${1:?} --arg unit ${2:-days}
+```
+
+### Example
+
+```bash
+start | last 6 month | merge-cte
+```
+
+## id first
+
+- Filter rows from the earliest N units
+
+```yml
+class: filter
+```
+
+```sql
+SELECT * FROM {prev} WHERE \($_a.ts) <= (SELECT MIN(\($_a.ts)) FROM {prev}) + INTERVAL \($n) \($unit)
+```
+
+```bash
+sql --arg n ${1:?} --arg unit ${2:-days}
+```
+
+### Example
+
+```bash
+start | first 30 day | merge-cte
+```
+
+## id since
+
+- Filter rows from a given date onward
+
+```yml
+class: filter
+```
+
+```sql
+SELECT * FROM {prev} WHERE \($_a.ts) >= '\($date)'
+```
+
+```bash
+sql --arg date ${1:?}
+```
+
+### Example
+
+```bash
+start | since 2025-01-01 | merge-cte
+```
+
+## id until
+
+- Filter rows before a given date
+
+```yml
+class: filter
+```
+
+```sql
+SELECT * FROM {prev} WHERE \($_a.ts) < '\($date)'
+```
+
+```bash
+sql --arg date ${1:?}
+```
+
+### Example
+
+```bash
+start | until 2025-07-01 | merge-cte
+```
+
+# Map operators
+
+## id keep
+
+- Projection: keep only selected columns
 
 ```yml
 class: map
@@ -200,133 +266,59 @@ SELECT \($ARGS.positional | join(", ")) FROM {prev}
 sql --args "$@"
 ```
 
-## Use distinct
+## id hide
 
-### id distinct
+- Exclusion: remove selected columns
 
 ```yml
-class: aggregate
+class: map
 ```
 
 ```sql
-SELECT DISTINCT \($ARGS.positional | join(", ")) FROM {prev}
+SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}
 ```
 
 ```bash
 sql --args "$@"
 ```
 
-## Use count
+### Example
 
-### id count
+```bash
+start | sum server size,cnt | human size | hide size cnt | merge-cte | ddb -box
+```
+
+## id rename
+
+- Rename a column
 
 ```yml
-class: aggregate
+class: map
 ```
 
 ```sql
-SELECT COUNT(\($count)) FROM {prev}
+SELECT * REPLACE (\($old) AS \($new)) FROM {prev}
 ```
 
 ```bash
-sql --arg count "$1"
+: ${2:?}; sql --arg old $1 --arg new $2
 ```
 
 ### Example
 
 ```bash
-start | distinct server,path | count | merge-cte | ddb -box
+start | rename date ts | merge-cte
 ```
 
-```txt
-┌──────────────┐
-│ count_star() │
-├──────────────┤
-│ 54062        │
-└──────────────┘
-```
+## id human
 
-## Count over a grouped col
-
-### id grpcnt
-
-```yml
-class: aggregate
-```
-
-```sql
-SELECT \($group), COUNT(*) AS cnt FROM {prev} GROUP BY \($group)
-```
-
-```bash
-sql --arg group ${1:?}
-```
-
-### Example
-
-> [!NOTE]
-> As the default DB is a reduced one (group by hour on dir part of
-> path with sum over cnt and size) we'll use the full DB here
-
-- Count by server and file name
-
-```bash
-start | grpcnt server,path[-1] | order cnt | limit 10 | merge-cte | duckdb tmp/ssp.db -box
-```
-
-```txt
-┌──────────┬────────────────┬───────┐
-│  server  │    path[-1]    │  cnt  │
-├──────────┼────────────────┼───────┤
-│ profnte1 │ data.zip       │ 30014 │
-│ profntr1 │ data.zip       │ 16418 │
-│ profntp1 │ data.zip       │ 110   │
-│ profnte1 │ pop.txt        │ 12    │
-│ profntp1 │ recoding.sql   │ 8     │
-│ profntp1 │ files_list.php │ 8     │
-│ profntp1 │ revert.sql     │ 8     │
-│ profnte1 │ Apicem.111.pem │ 6     │
-│ profnte1 │ Master.119     │ 6     │
-│ profnte1 │ Master.125     │ 6     │
-└──────────┴────────────────┴───────┘
-```
-
-- Count by server and file dir
-
-```bash
-start | grpcnt server,path[:-2] | order cnt | limit 10 | merge-cte | duckdb tmp/ssp.db -box
-```
-
-```txt
-┌──────────┬─────────────────────────────────────────────────────────┬─────────┐
-│  server  │                        path[:-2]                        │   cnt   │
-├──────────┼─────────────────────────────────────────────────────────┼─────────┤
-│ profntr1 │ [ssp, upload, files_1731959368]                         │ 1083387 │
-│ profntp1 │ [ssp, upload, files_1731959368]                         │ 609414  │
-│ profnte1 │ [ssp, upload, files_1731959368]                         │ 269990  │
-│ profnte1 │ [ssp, upload, files_1731959368_by_group, 868, 2023, 11] │ 206068  │
-│ profnte1 │ [ssp, upload, files_1731959368_by_group, 868, 2023, 05] │ 205963  │
-│ profntr1 │ [ssp_ndf, upload, files_1731959368]                     │ 202718  │
-│ profntp1 │ [ssp_pf_bio_covid, upload, files_1731959368]            │ 181905  │
-│ profnte1 │ [ssp, hl7, 891-Nantes, archives, ADT]                   │ 86082   │
-│ profnte1 │ [ssp, apicrypt, 201, attachments]                       │ 68560   │
-│ profnte1 │ [ssp, apicrypt, 338, attachments]                       │ 51510   │
-└──────────┴─────────────────────────────────────────────────────────┴─────────┘
-```
-
-## Format integer values of a list of cols for human
-
-- Use `format_bytes` or `formatReadableDecimalSize`
-  [DuckDB Text Functions][] to converts integer to a human-readable
-  representation using units based on powers of either 2 (KiB, MiB,
-  GiB, etc.) or 10 (KB, MB, GB, etc.)
-- Add a new col with the converted value with col name prefixed by `h`
+- Human-readable sizes using DuckDB text functions
+- `format_bytes` (base 2) or `formatReadableDecimalSize` (base 10)
+- Adds a new column prefixed with `h`
 
 [DuckDB Text Functions]:
     https://duckdb.org/docs/stable/sql/functions/text
     "duckdb.org"
-
-### id human
 
 ```yml
 class: map
@@ -360,175 +352,186 @@ step2 AS (SELECT *, "formatReadableDecimalSize"(cnt::BIGINT) AS hcnt FROM step1)
 SELECT * FROM step2
 ```
 
-- And
+## id sep
 
-```bash
-start | sum server size,cnt | human size | human --b=10 cnt | merge-cte | ddb -box
-```
-
-```txt
-┌──────────┬──────────────┬─────────┬───────────┬──────────┐
-│  server  │     size     │   cnt   │   hsize   │   hcnt   │
-├──────────┼──────────────┼─────────┼───────────┼──────────┤
-│ profntr1 │ 523076872829 │ 2062966 │ 487.1 GiB │ 2.0 MB   │
-│ profntp1 │ 131249243554 │ 797486  │ 122.2 GiB │ 797.4 kB │
-│ profnte1 │ 655727727112 │ 2022817 │ 610.6 GiB │ 2.0 MB   │
-└──────────┴──────────────┴─────────┴───────────┴──────────┘
-```
-
-### TODO
-
-- Allow better arg parsing (.e.g. `human size cnt:d`)
-
-## hide cols
-
-### id hide
+- Format integer columns with thousand separators (`1,000,000`)
+- Converts numbers to strings, use as final step after `order`
 
 ```yml
 class: map
 ```
 
+```jq
+def fmt: "printf('%,d', \"\(.)\") AS \"\(.)\"";
+((.[-1].a) // {}) as $_a | . + [{a: $_a, q: "SELECT * REPLACE (\($ARGS.positional | map(fmt) | join(", "))) FROM {prev}"}]
+```
+
+```bash
+self --args "$@"
+```
+
+### Example
+
+```bash
+start | span month | sep size | merge-cte | ddb -box
+```
+
+## id pct
+
+- Converts a ratio (0.18) to a percentage string ("18.00%")
+- Multiplies by 100 and adds the `%` symbol
+- Changes column type to String, preventing further numeric formatting
+
+```yml
+class: map
+```
+
+```jq
+# %% escapes the percent sign in printf
+def fmt: "printf('%.2f%%', \"\(.)\" * 100) AS \"\(.)\"";
+((.[-1].a) // {}) as $_a | . + [{a: $_a, q: "SELECT * REPLACE (\($ARGS.positional | map(fmt) | join(", "))) FROM {prev}"}]
+```
+
+```bash
+self --args "$@"
+```
+
+### Example
+
+```bash
+start | span month | growth size | pct size_rate | merge-cte | ddb -box
+```
+
+# Aggregate operators
+
+## id sum
+
+- Sum over grouped columns
+- Uses `$_a.vals` as default for columns to sum
+
+```yml
+class: aggregate
+```
+
 ```sql
-SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}
+SELECT \($group), \((if $sum != "" then $sum else $_a.vals end) / "," | map("SUM(\(.)) AS \(.)") | join(", ")) FROM {prev} GROUP BY \($group)
+```
+
+```bash
+sql --arg group ${1:?} --arg sum "${2:-}"
+```
+
+### Example
+
+```bash
+start | sum server | merge-cte | ddb -box
+```
+
+## id count
+
+- Scalar count
+
+```yml
+class: aggregate
+```
+
+```sql
+SELECT COUNT(\($count)) FROM {prev}
+```
+
+```bash
+sql --arg count "$1"
+```
+
+### Example
+
+```bash
+start | distinct server,path | count | merge-cte | ddb -box
+```
+
+## id grpcnt
+
+- Grouped count
+
+```yml
+class: aggregate
+```
+
+```sql
+SELECT \($group), COUNT(*) AS cnt FROM {prev} GROUP BY \($group)
+```
+
+```bash
+sql --arg group ${1:?}
+```
+
+### Example
+
+```bash
+start | grpcnt server | order cnt | items 10 | merge-cte | ddb -box
+```
+
+## id distinct
+
+- Deduplication
+
+```yml
+class: aggregate
+```
+
+```sql
+SELECT DISTINCT \($ARGS.positional | join(", ")) FROM {prev}
 ```
 
 ```bash
 sql --args "$@"
 ```
 
-### Example
+## id span
 
-- Hide cols also presented with a special format
+- Sum over time bucket with positional API
+- `span month` = 1 month bucket
+- `span 2 week` = 2 week bucket
+- Overrides via `--group=COL`, `--vals=COLS`
 
-```bash
-start | sum server size,cnt | human size | human --b=10 cnt | hide size cnt | merge-cte | ddb -box
+```yml
+class: aggregate
 ```
-
-```txt
-┌──────────┬───────────┬──────────┐
-│  server  │   hsize   │   hcnt   │
-├──────────┼───────────┼──────────┤
-│ profntp1 │ 122.2 GiB │ 797.4 kB │
-│ profntr1 │ 487.1 GiB │ 2.0 MB   │
-│ profnte1 │ 610.6 GiB │ 2.0 MB   │
-└──────────┴───────────┴──────────┘
-```
-
-## Filter on col value
-
-### id where
 
 ```sql
-SELECT * FROM {prev} WHERE \($ARGS.positional | join(" "))
-```
-
-```bash
-sql --args "$@"
-```
-
-### Example
-
-```bash
-start | where size == 0 | count | merge-cte | duckdb tmp/ssp.db -line
-```
-
-`count_star() = 2864`
-
-### id is
-
-```bash
-: ${2:?}; where $1 == "'$2'"
-```
-
-### Example
-
-```bash
-start | is server profntr1 | sum path[1] | order size | merge-cte | ddb -box
-```
-
-```txt
-┌───────────────┬─────────┬──────────────┐
-│    path[1]    │   cnt   │     size     │
-├───────────────┼─────────┼──────────────┤
-│ ssp_ndf       │ 776718  │ 337280962161 │
-│ ssp           │ 1285902 │ 185716649410 │
-│ ssp_ndf_stats │ 343     │ 79256468     │
-│ ssp-ndf       │ 1       │ 4450         │
-│ ssp_stats     │ 2       │ 340          │
-└───────────────┴─────────┴──────────────┘
-```
-
-### id like
-
-```bash
-: ${2:?}; where $1 like "'$2'"
-```
-
-### Example
-
-```bash
-start | like path[1] %pf% | sum server,path[1] | order size | merge-cte | ddb -box
-```
-
-```txt
-┌──────────┬──────────────────┬────────┬─────────────┐
-│  server  │     path[1]      │  cnt   │    size     │
-├──────────┼──────────────────┼────────┼─────────────┤
-│ profntp1 │ ssp_pf_bio_covid │ 183471 │ 16115312864 │
-│ profntp1 │ esisdocs-pf      │ 806    │ 296389282   │
-│ profntp1 │ esisdoccu-pf     │ 112    │ 43766559    │
-│ profntp1 │ ssp_pf_stats     │ 22     │ 32427314    │
-│ profntp1 │ portail-sante-pf │ 14     │ 178995      │
-└──────────┴──────────────────┴────────┴─────────────┘
-```
-
-## Sum over time bucket
-
-### id span
-
-```sql
-SELECT time_bucket(INTERVAL '\($n) \($bucket)', date) date,
-\($group), \($sum / "," | map("SUM(\(.)) AS \(.)") | join(", ")), 
+SELECT time_bucket(INTERVAL '\($n) \($bucket)', \($_a.ts)) \($_a.ts),
+\(if $group != "" then $group else $_a.part end), \((if $sum != "" then $sum else $_a.vals end) / "," | map("SUM(\(.)) AS \(.)") | join(", ")),
 FROM {prev} GROUP BY all
 ```
 
 ```bash
-local -A opts; local args cont; opts "$@"
-sql --argjson n ${opts[n]:-1} --arg bucket ${opts[bucket]:-year} --arg group ${opts[group]:-server} --arg sum ${opts[sum]:-cnt,size}
+PARSARG
+local n bucket
+if [[ ${#args[@]} -ge 2 ]]; then
+  n=${args[0]}; bucket=${args[1]}
+elif [[ ${#args[@]} -eq 1 ]]; then
+  n=1; bucket=${args[0]}
+else
+  n=1; bucket=year
+fi
+sql --argjson n "$n" --arg bucket "$bucket" \
+  --arg group "${opts[group]:-}" --arg sum "${opts[vals]:-}"
 ```
 
 ### Example
 
 ```bash
-start | span | order date asc | merge-cte | ddb
-start | where server is profntr1 | span --bucket=month --group=
+start | span month | order date asc | merge-cte | ddb -box
+start | span 2 week | merge-cte | ddb -box
 ```
 
-# WIP CTE
+# Window operators
 
-## Volume growth rate over last n time units
+## id growth
 
-### id last
-
-* Filter rows relative to now
-
-```yml
-class: filter
-```
-
-```sql
-SELECT * FROM {prev} WHERE date >= now() - INTERVAL \($n) \($unit)
-```
-
-```bash
-sql --arg n ${1:?} --arg unit ${2:-days}
-```
-
-### id growth
-
-* Calculate evolution of a column (diff and rate) compared to previous time slot
-* Adds `_diff` and `_rate` columns
-* Requires `date` column (provided by `span` or `reduce-stat`)
+- Calculate evolution of a column (diff and rate) vs previous time slot
+- Adds `_diff` and `_rate` columns
+- Uses `$_a.ts` for ORDER BY, `$_a.part` for PARTITION BY
 
 ```yml
 class: window
@@ -539,72 +542,91 @@ SELECT *,
   \($col) - prev AS \($col)_diff,
   round((\($col) - prev)::DOUBLE / nullif(prev, 0), 4) AS \($col)_rate
 FROM (
-  SELECT *, LAG(\($col)) OVER (PARTITION BY \($part) ORDER BY date) AS prev
+  SELECT *, LAG(\($col)) OVER (PARTITION BY \(if $part != "" then $part else $_a.part end) ORDER BY \($_a.ts)) AS prev
   FROM {prev}
 )
 ```
 
 ```bash
-: ${1:?}; sql --arg col $1 --arg part ${2:-server}
+sql --arg col ${1:?} --arg part "${2:-}"
 ```
 
 ### Example
 
-* Volume growth rate over last 100 days
-
 ```bash
-start | last 6 month | span --bucket=month | growth size | order date asc | merge-cte | ddb -box
+start | last 6 month | span month | growth size | order date asc | merge-cte | ddb -box
 ```
 
-That is a smart strategy. By converting the column to a string (VARCHAR) inside the SQL pipeline, you "protect" it from any subsequent number formatting (like `fmt-auto` or `iec`) which typically ignores non-numeric types.
+## id acc
 
-Here is the `pct` CTE atom. It performs the multiplication and formatting in one pass.
-
-### id pct
-
-* Converts a ratio (0.18) to a percentage string ("18.00%")
-* Multiplies by 100 and adds the `%` symbol
-* **Side Effect:** Changes column type to String, preventing further numeric formatting.
+- Accumulate (running total) of a column
+- Adds `_cumul` suffix to the new column name
+- Uses `$_a.ts` for ORDER BY, `$_a.part` for PARTITION BY
 
 ```yml
-class: map
+class: window
 ```
 
-```jq
-# %% escapes the percent sign in printf
-def fmt: "printf('%.2f%%', \"\(.)\" * 100) AS \"\(.)\"";
-. + ["SELECT * REPLACE (\($ARGS.positional | map(fmt) | join(", "))) FROM {prev}"]
+```sql
+SELECT *, SUM(\($col)) OVER (PARTITION BY \(if $part != "" then $part else $_a.part end) ORDER BY \($_a.ts)) AS \($col)_cumul FROM {prev}
 ```
 
 ```bash
-self --args "$@"
+sql --arg col ${1:?} --arg part "${2:-}"
 ```
 
 ### Example
 
 ```bash
-start | ... | growth size | pct size_rate | ddb -box
+start | last 6 month | span month | growth size | chain acc size size_diff | order date asc | merge-cte | ddb -box
 ```
 
-**Output:**
+# Order / Limit operators
 
-```txt
-┌───────────┐
-│ size_rate │
-│  varchar  │
-├───────────┤
-│ NULL      │
-│ 959.22%   │
-│ 18.59%    │
-│ -8.26%    │
-└───────────┘
+## id order
+
+- Sort results
+
+```yml
+class: order_limit
 ```
 
-## Accumlate running value of a column
+```sql
+SELECT * FROM {prev} ORDER BY \($order) \($dir)
+```
 
-### id chain
+```bash
+sql --arg order ${1:?} --arg dir ${2:-DESC}
+```
 
-* Apply a command to a list of arguments recursively, piping the result of each step to the next.
+## id items
+
+- Limit the number of results
+
+```yml
+class: order_limit
+```
+
+```sql
+SELECT * FROM {prev} LIMIT \($limit)
+```
+
+```bash
+sql --arg limit ${1:-40}
+```
+
+### Example
+
+```bash
+start | order size | items 10 | merge-cte | ddb -box
+```
+
+# Meta operators
+
+## id chain
+
+- Apply a command to a list of arguments recursively, piping the
+  result of each step to the next
 
 ```jq
 $ARGS.positional | map("\($cmd) \(.)") | join(" | ")
@@ -614,34 +636,9 @@ $ARGS.positional | map("\($cmd) \(.)") | join(" | ")
 source <(self -nr --arg cmd "${1:?}" --args "${@:2}")
 ```
 
-### id acc
+## id fmt-auto
 
-* Accumulate (running total) of a column
-* Adds a `_cumul` suffix to the new column name
-
-```yml
-class: window
-```
-
-```sql
-SELECT *, SUM(\($col)) OVER (PARTITION BY \($part) ORDER BY date) AS \($col)_cumul FROM {prev}
-```
-
-```bash
-: ${1:?}; sql --arg col $1 --arg part ${2:-server}
-```
-
-### Example
-
-```bash
-start | last 6 month | span --bucket=month | growth size | chain acc size size_diff | order date asc | merge-cte | ddb -box
-```
-
-## Format big numbers
-
-### id fmt-auto
-
-- Post process SQL output
+- Post process SQL JSON output with IEC formatting
 
 ```jq
 def iec(d):
@@ -661,75 +658,8 @@ self -c | sqlite-utils memory stdin:nl "select * from stdin" --fmt github
 ### Example
 
 ```bash
-latest-growth | merge-cte | ddb -json | fmt-auto
+start | span month | growth size | merge-cte | ddb -json | fmt-auto
 ```
-
-### id fmt
-
-* Format integer columns with underscore separators (`1_000_000`)
-* Uses `SELECT * REPLACE ...` to modify columns in place
-* **Note:** Converts numbers to strings, so use this as the **final** step (after `order`).
-
-```yml
-class: map
-```
-
-```jq
-def fmt: "printf('%,d', \"\(.)\") AS \"\(.)\"";
-. + ["SELECT * REPLACE (\($ARGS.positional | map(fmt) | join(", "))) FROM {prev}"]
-```
-
-```bash
-self --args "$@"
-```
-
-### Example
-
-```bash
-latest-growth | fmt size size_diff size_cumul size_diff_cumul | merge-cte | ddb -box
-```
-
-# Combine CTE
-
-## Shows latest growth
-
-### id del
-
-* Removes specific columns from the pipeline using `EXCLUDE`.
-
-```yml
-class: map
-```
-
-```jq
-. + ["SELECT * EXCLUDE (\($ARGS.positional | join(", "))) FROM {prev}"]
-```
-
-```bash
-self --args "${@:?usage: del col ...}"
-```
-
-### Example
-
-```bash
-latest-growth 12 month | del server prev | merge-cte | ddb -json | fmt-auto
-```
-
-### id latest-growth
-
-```bash
-PARSARG
-local n=${args[0]:-6} unit=${args[1]:-month}; local bucket=${opts[b]:-$unit}
-start | last $n $unit | span --bucket=$bucket | growth size | pct size_rate | chain acc size size_diff | del server prev | order date asc
-```
-
-### Example
-
-```bash
-latest-growth | merge-cte | ddb -json | fmt-auto
-```
-
-# TMP
 
 [Local Variables:]::
 [indent-tabs-mode: nil]::
