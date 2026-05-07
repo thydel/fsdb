@@ -48,7 +48,7 @@
         (imn.json->0)::BIGINT inode,
         to_timestamp((ysi.json->0)::BIGINT) uts,
         (ysi.json->1)::BIGINT size,
-        list_filter(string_split(imn.json->>2, '/'), x -> x != '.') path
+        list_filter(string_split(imn.json->>2, '/'), lambda x: x != '.') path
     FROM read_json_auto('\($what)-imn-stat.js.gz') imn
     JOIN read_json_auto('\($what)-Ysi-stat.js.gz') ysi 
       ON (imn.json->0)::BIGINT = (ysi.json->2)::BIGINT
