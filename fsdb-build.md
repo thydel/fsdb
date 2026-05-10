@@ -1,5 +1,22 @@
 <!-- m4_changequote(«,»)m4_changecom() -->
 
+<!--
+echo '$table-of-contents$' > tmp/toc.md
+< fsdb-build.md pandoc -f gfm -t gfm --toc --toc-depth=6 --template tmp/toc.md --columns=196 | grep -v Table.of.Contents
+-->
+
+-   [What is this file](#what-is-this-file)
+-   [raw header](#raw-header)
+-   [id stat-args](#id-stat-args)
+-   [id files-stat](#id-files-stat)
+-   [macro](#macro)
+-   [id conf-names](#id-conf-names)
+-   [id var](#id-var)
+-   [id get-files-stat](#id-get-files-stat)
+-   [id ingest-stat](#id-ingest-stat)
+-   [id reduce-stat](#id-reduce-stat)
+-   [id merge-db](#id-merge-db)
+
 # What is this file
 
 - A minimal starting point for the refactoring of `fsdb`
