@@ -305,6 +305,8 @@ small-db-basic-facts | duckdb tmp/nfsdata-small.db --box
 table-info | duckdb tmp/nfsdata.db --box
 ```
 
+---
+
 ```text
 ┌─────────────┬──────────────────────────┐
 │ column_name │       column_type        │
@@ -320,6 +322,8 @@ table-info | duckdb tmp/nfsdata.db --box
 ```bash
 <<< 'select * from fsdb order by uts desc limit 10' duckdb tmp/nfsdata.db
 ```
+
+---
 
 ```text
 ┌──────────┬──────────────────────┬───────┬───────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────┐
@@ -347,6 +351,8 @@ table-info | duckdb tmp/nfsdata.db --box
 table-info | duckdb tmp/nfsdata-small.db --box
 ```
 
+---
+
 ```text
 ┌─────────────┬──────────────────────────┐
 │ column_name │       column_type        │
@@ -365,6 +371,8 @@ table-info | duckdb tmp/nfsdata-small.db --box
 ```bash
 <<< "select * from fsdb where server == 'protpstrd1_data_nfsdata_small' and cnt > 1 order by date desc limit 10" duckdb tmp/nfsdata-small.db
 ```
+
+---
 
 
 ```text
@@ -413,6 +421,52 @@ load out/fsdb-cte.yml
 ```console
 thy@controla2:~/usr/fsdb$ start | where size == 0 | count | merge-cte | ddb -line
 count_star() = 2780
+```
+
+## More tries
+
+```bash
+start | is server prostrb2_data_nfsdata_small | sum path[1:3] | order size | merge-cte | ddb -box
+```
+
+---
+
+```text
+┌────────────────────────────────────────┬────────┬──────────────┐
+│               path[1:3]                │  cnt   │     size     │
+├────────────────────────────────────────┼────────┼──────────────┤
+│ [profntu1, applisdata, centralisateur] │ 734790 │ 174762341933 │
+│ [profntu1, applisdata, neonatweb]      │ 253968 │ 70739935868  │
+│ [profntu1, applisdata, neonatlabo]     │ 830220 │ 44036538325  │
+│ [profntu1, applisdata, surditeinvs]    │ 458    │ 4107061938   │
+│ [shared, pentao, surditeinvs]          │ 136    │ 1113633297   │
+│ [profntu1, applisdata, neonatfiles]    │ 45774  │ 1105024761   │
+│ [profntu1, applisdata, 2rm_02122024]   │ 94     │ 4640060      │
+│ [profntu1, applisdata, epifiles]       │ 24     │ 405979       │
+└────────────────────────────────────────┴────────┴──────────────┘
+```
+
+```bash
+start | like path[2] %neo% | sum server,path[2] | order size | merge-cte | ddb -box
+```
+
+---
+
+```text
+┌───────────────────────────────┬──────────────────┬──────┬────────────┐
+│            server             │     path[2]      │ cnt  │    size    │
+├───────────────────────────────┼──────────────────┼──────┼────────────┤
+│ protpstrf1_data_nfsdata_small │ neonet-862       │ 4669 │ 4496297965 │
+│ prestr1_data_nfsdata_small    │ neoesis          │ 4744 │ 887103035  │
+│ prestr1_data_nfsdata_small    │ neonatlabo226    │ 3967 │ 482817845  │
+│ prestr1_data_nfsdata_small    │ neonatlabo-alpha │ 1126 │ 279495455  │
+│ prestr1_data_nfsdata_small    │ neoesis-alpha    │ 1373 │ 131321219  │
+│ prestr1_data_nfsdata_small    │ portailneo       │ 270  │ 25354892   │
+│ prestr1_data_nfsdata_small    │ neoesis-recette  │ 49   │ 5565478    │
+│ prestr1_data_nfsdata_small    │ neobci           │ 8    │ 3228202    │
+│ prestr1_data_nfsdata_small    │ neonatweb        │ 60   │ 1513909    │
+│ prestr1_data_nfsdata_small    │ neodemat         │ 20   │ 824369     │
+└───────────────────────────────┴──────────────────┴──────┴────────────┘
 ```
 
 <!--
