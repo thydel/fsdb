@@ -226,7 +226,7 @@ sql --arg date ${1:?}
 start | since 2025-01-01 | merge-cte
 ```
 
-## id until
+## id Until
 
 - Filter rows before a given date
 
