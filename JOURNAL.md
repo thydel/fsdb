@@ -1,3 +1,43 @@
+<!--
+echo '$table-of-contents$' > tmp/toc.md
+< JOURNAL.md pandoc -f gfm -t gfm --toc --toc-depth=6 --template tmp/toc.md --columns=196 | grep -v Table.of.Contents
+-->
+
+-   [Make it like home](#make-it-like-home)
+    -   [`/usr/local/bin`](#usrlocalbin)
+    -   [`baj`](#baj)
+    -   [`rust`](#rust)
+    -   [`mdq`](#mdq)
+    -   [`duckdb`](#duckdb)
+    -   [`gnupg`](#gnupg)
+-   [Generate yml from MD](#generate-yml-from-md)
+-   [Load lib](#load-lib)
+-   [Get list of node with a `/data`](#get-list-of-node-with-a-data)
+-   [Use `/space`](#use-space)
+-   [Get files stat for all `nfsdata`](#get-files-stat-for-all-nfsdata)
+-   [Ingest stat](#ingest-stat)
+-   [Make a reduced version of all DB](#make-a-reduced-version-of-all-db)
+-   [Found a problem](#found-a-problem)
+    -   [Kernel log](#kernel-log)
+    -   [Broken DB](#broken-db)
+-   [Fix it](#fix-it)
+    -   [Install older `duckdb` version](#install-older-duckdb-version)
+-   [Rebuild everything](#rebuild-everything)
+    -   [Get files stat for all `nfsdata`](#get-files-stat-for-all-nfsdata-1)
+-   [Ingest stat](#ingest-stat-1)
+-   [Make a reduced version of all DB](#make-a-reduced-version-of-all-db-1)
+-   [And concatenate all DB](#and-concatenate-all-db)
+-   [Keep it `tmp` (don't commit)](#keep-it-tmp-dont-commit)
+-   [Add misc funcs](#add-misc-funcs)
+-   [Show minimal facts](#show-minimal-facts)
+-   [Here is the previous state from 3 months ago](#here-is-the-previous-state-from-3-months-ago)
+-   [More basic info and usage exemple](#more-basic-info-and-usage-exemple)
+    -   [The big DB](#the-big-db)
+    -   [The small one](#the-small-one)
+-   [Try CTE](#try-cte)
+    -   [First try](#first-try)
+
+
 # Make it like home
 
 ## `/usr/local/bin`
