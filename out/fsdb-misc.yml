@@ -1,0 +1,67 @@
+- { id: null, ns: fsdb }
+
+- id: table-info
+  sql: |-
+    SELECT name AS column_name, type AS column_type FROM pragma_table_info('\($table)')
+  sh: |-
+    jq -nr "\"$sql\"" "" --arg table ${1:-fsdb}
+  tt: |-
+    table-info | duckdb tmp/ssp.db --box
+
+- id: full-db-basic-facts
+  sql: |-
+    SELECT
+      STRFTIME(min(uts), '%Y-%m-%d') AS start,
+      STRFTIME(max(uts), '%Y-%m-%d') AS end,
+      count(DISTINCT server) AS servers,
+      format_bytes(count(*)::BIGINT) AS files,
+      format_bytes(sum(size)::BIGINT) AS size
+    FROM fsdb;
+    
+  sh: |-
+    jq -nr "\"$sql\"" ""
+  tt: |-
+    full-db-basic-facts | duckdb tmp/ssp.db --box
+
+- id: small-db-basic-facts
+  sql: |-
+    SELECT
+      STRFTIME(min(date), '%Y-%m-%d') AS start,
+      STRFTIME(max(date), '%Y-%m-%d') AS end,
+      format_bytes(count(*)::BIGINT) AS rows,
+      count(DISTINCT server) AS servers,
+      format_bytes(count(DISTINCT path)) AS dirs,
+      format_bytes(sum(cnt)::BIGINT) AS files,
+      format_bytes(sum(size)::BIGINT) AS size
+    FROM fsdb;
+  sh: |-
+    jq -nr "\"$sql\"" ""
+  tt: |-
+    small-db-basic-facts | duckdb out/ssp-small.db --box
+
+- id: query-stat
+  sql: |-
+    SELECT 
+        \($time) as time,
+        path[1:\($depth)] as depth,
+        sum(cnt) as files,
+        sum(size) as bytes,
+        min(min) as min_size,
+        max(max) as max_size,
+        sum(size) / sum(cnt) as avg_size
+    FROM fsdb
+    GROUP BY all
+    ORDER BY time, depth
+  sh: |-
+    local time="${1:-date}" # Default to existing hourly timestamp
+    local depth="${2:-99}"	# Default to deep path
+    
+    jq -nr "\"$sql\"" "" --arg depth "$depth" --arg time "$time" | duckdb tmp/nfsdata-small.db
+  tt: |-
+    day="time_bucket(INTERVAL '1 day', date)"
+    year="time_bucket(INTERVAL '1 year', date)"
+    hour='hour(date)'
+    dow='dayofweek(date)'
+    
+    query-stat "time_bucket(INTERVAL '5 year', date)" 1
+    query-stat "$year" 1

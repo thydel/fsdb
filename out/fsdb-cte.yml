@@ -67,7 +67,7 @@
   sh: |-
     sql --arg date ${1:?}
 
-- id: until
+- id: Until
   class: filter
   sql: |-
     SELECT * FROM {prev} WHERE \($_a.ts) < '\($date)'
