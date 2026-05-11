@@ -678,7 +678,7 @@ def iec(d):
 
 ```bash
 #self -c | sqlite-utils memory stdin:nl "select * from stdin" --fmt github
-self -c --argjson n ${1:0} | duckdb  --markdown -c "SELECT * FROM read_json_auto('/dev/stdin')"
+self -c --argjson n ${1:-0} | duckdb  --markdown -c "SELECT * FROM read_json_auto('/dev/stdin')"
 ```
 
 ### Example
