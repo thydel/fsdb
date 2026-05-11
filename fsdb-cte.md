@@ -716,6 +716,16 @@ start | order size | items 10 | merge-cte | ddb -box
 
 # Meta operators
 
+## id ddbj
+
+```sql
+SELECT * FROM read_json_auto('/dev/stdin')
+```
+
+```bash
+duckdb -c "$sql" "$@"
+```
+
 ## id chain
 
 - Apply a command to a list of arguments recursively, piping the

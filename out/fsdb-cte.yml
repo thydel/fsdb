@@ -210,6 +210,12 @@
   sh: |-
     sql --arg limit ${1:-40}
 
+- id: ddbj
+  sql: |-
+    SELECT * FROM read_json_auto('/dev/stdin')
+  sh: |-
+    duckdb -c "$sql" "$@"
+
 - id: chain
   jq: |-
     $ARGS.positional | map("\($cmd) \(.)") | join(" | ")
