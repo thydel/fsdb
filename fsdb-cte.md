@@ -673,11 +673,12 @@ def iec(d):
     1024 as $k | ([ while(. >= $k; . / $k) ] | length) as $l
     | (. / pow($k; $l) | n(d) | tostring) + ["", "K", "M", "G", "T"][$l]
   end;
-.[] | map_values(try iec(0) // .)
+.[] | map_values(try iec($n) // .)
 ```
 
 ```bash
-self -c | sqlite-utils memory stdin:nl "select * from stdin" --fmt github
+#self -c | sqlite-utils memory stdin:nl "select * from stdin" --fmt github
+self -c --argjson n ${1:0} | duckdb  --markdown -c "SELECT * FROM read_json_auto('/dev/stdin')"
 ```
 
 ### Example
