@@ -48,7 +48,8 @@ echo '$table-of-contents$' > tmp/toc.md
                 -   [`ssp` By year since 2018](#ssp-by-year-since-2018)
         -   [`prostrc1`](#prostrc1)
             -   [Pseudo `df`](#pseudo-df-1)
-                -   [`ssp` By year since 2018](#ssp-by-year-since-2018-1)
+            -   [By time span on a dir](#by-time-span-on-a-dir-1)
+                -   [`ssp` By year since 2015](#ssp-by-year-since-2015)
                 -   [`ssp` By month since 2025](#ssp-by-month-since-2025)
 
 # Make it like home
@@ -652,7 +653,9 @@ start | like server prot1strc1% | as path[3:5] set | sum set | where size \> 1e9
 | [ssp, HPV]                               | 3K   | 1G   |
 | [ssp, apicrypt, 338-kourou]              | 7K   | 998M |
 
-##### `ssp` By year since 2018
+#### By time span on a dir
+
+##### `ssp` By year since 2015
 
 ```bash
 start | dir: prot1strc1 ssp | since: 2015-01-01 year | merge-cte | ddb -json | fmt-auto
