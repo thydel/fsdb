@@ -36,7 +36,20 @@ echo '$table-of-contents$' > tmp/toc.md
     -   [The small one](#the-small-one)
 -   [Try CTE](#try-cte)
     -   [First try](#first-try)
-
+    -   [More tries](#more-tries)
+-   [Try some exploration](#try-some-exploration)
+    -   [Copy DB from `controla2`](#copy-db-from-controla2)
+    -   [Look for recent `DF_HIGH_SPACE`](#look-for-recent-df_high_space)
+        -   [`prot1strb1`](#prot1strb1)
+            -   [Pseudo `df`](#pseudo-df)
+            -   [On subdir on top dir](#on-subdir-on-top-dir)
+            -   [By time span on a dir](#by-time-span-on-a-dir)
+                -   [`ssp_ndf` By month since 2025](#ssp_ndf-by-month-since-2025)
+                -   [`ssp` By year since 2018](#ssp-by-year-since-2018)
+        -   [`prostrc1`](#prostrc1)
+            -   [Pseudo `df`](#pseudo-df-1)
+                -   [`ssp` By year since 2018](#ssp-by-year-since-2018-1)
+                -   [`ssp` By month since 2025](#ssp-by-month-since-2025)
 
 # Make it like home
 
@@ -468,6 +481,228 @@ start | like path[2] %neo% | sum server,path[2] | order size | merge-cte | ddb -
 │ prestr1_data_nfsdata_small    │ neodemat         │ 20   │ 824369     │
 └───────────────────────────────┴──────────────────┴──────┴────────────┘
 ```
+
+# Try some exploration
+
+## Copy DB from `controla2`
+
+- On my WS
+
+```bash
+rsync -e ssh -av controla2:usr/fsdb/tmp/nfsdata-small.db .
+rsync -e ssh -av controla2:usr/fsdb/tmp/nfsdata.db .
+```
+
+## Look for recent `DF_HIGH_SPACE`
+
+```text
+Liste des anormalités fatales
+Anormalités fatales
+Date	Serveur	Gravité	Anormalité	Commentaire
+2026-05-11 11:23:58 	prot1strb1 	FATAL 	DF_HIGH_SPACE 	93%§/data (limit: 90)
+2026-05-11 11:24:56 	prot1strc1 	FATAL 	DF_HIGH_SPACE 	91%§/data (limit: 90)
+```
+
+### `prot1strb1`
+
+#### Pseudo `df`
+
+```bash
+start | like server prot1strb1% | as path[3] set | sum set | where cnt \> 10 | order size | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|      set      | cnt  | size |
+|---------------|------|------|
+| ssp_ndf       | 1M   | 422G |
+| ssp           | 1M   | 181G |
+| ssp_ndf_stats | 464K | 36G  |
+
+
+#### On subdir on top dir
+
+```bash
+start | like server prot1strb1% | is path[3] ssp_ndf | as path[4] set | sum set | order size | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|        set        | cnt  | size |
+|-------------------|------|------|
+| upload            | 1M   | 349G |
+| upload_reprise_93 | 42K  | 49G  |
+| apicrypt          | 113K | 20G  |
+| stats             | 16K  | 1G   |
+| recodings         | 148  | 766M |
+| HPV               | 989  | 574M |
+| logs              | 278  | 18M  |
+| hl7               | 1K   | 1M   |
+
+
+#### By time span on a dir
+
+```bash
+dir: () { : ${2:?}; like server $1% | is path[3] $2; }
+since: () { : ${2:?}; since $1 | span $2 | as date::DATE start | order start asc | keep start cnt size; }
+```
+
+##### `ssp_ndf` By month since 2025
+
+```bash
+start | dir: prot1strb1 ssp_ndf | since: 2025-01-01 month | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|   start    | cnt  | size |
+|------------|------|------|
+| 2025-01-01 | 15K  | 5G   |
+| 2025-02-01 | 13K  | 4G   |
+| 2025-03-01 | 13K  | 4G   |
+| 2025-04-01 | 13K  | 4G   |
+| 2025-05-01 | 12K  | 4G   |
+| 2025-06-01 | 13K  | 4G   |
+| 2025-07-01 | 13K  | 4G   |
+| 2025-08-01 | 11K  | 3G   |
+| 2025-09-01 | 15K  | 5G   |
+| 2025-10-01 | 15K  | 5G   |
+| 2025-11-01 | 12K  | 4G   |
+| 2025-12-01 | 14K  | 5G   |
+| 2026-01-01 | 15K  | 4G   |
+| 2026-02-01 | 16K  | 5G   |
+| 2026-03-01 | 524K | 90G  |
+| 2026-04-01 | 20K  | 5G   |
+| 2026-05-01 | 4K   | 1G   |
+
+##### `ssp` By year since 2018
+
+```bash
+start | dir: prot1strb1 ssp | since: 2018-01-01 year | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|   start    | cnt  | size |
+|------------|------|------|
+| 2018-01-01 | 9K   | 1G   |
+| 2019-01-01 | 25K  | 5G   |
+| 2020-01-01 | 18K  | 4G   |
+| 2021-01-01 | 43K  | 5G   |
+| 2022-01-01 | 258K | 11G  |
+| 2023-01-01 | 655K | 108G |
+| 2024-01-01 | 84K  | 17G  |
+| 2025-01-01 | 162K | 19G  |
+| 2026-01-01 | 72K  | 8G   |
+
+### `prostrc1`
+
+#### Pseudo `df`
+
+```bash
+start | like server prot1strc1% | as path[3] set | sum set | where size \> 1e9 | order size | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|               set               | cnt | size |
+|---------------------------------|-----|------|
+| ssp                             | 2M  | 645G |
+| cupidon                         | 7K  | 1G   |
+| 201911xx_ssp_version_validation | 5K  | 1G   |
+
+
+```bash
+start | like server prot1strc1% | as path[3:4] set | sum set | where size \> 1e9 | order size | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|                     set                     | cnt  | size |
+|---------------------------------------------|------|------|
+| [ssp, upload]                               | 1M   | 590G |
+| [ssp, apicrypt]                             | 190K | 41G  |
+| [ssp, stats]                                | 31K  | 4G   |
+| [ssp, restitution]                          | 10K  | 4G   |
+| [cupidon, upload]                           | 7K   | 1G   |
+| [ssp, ORU]                                  | 9K   | 1G   |
+| [201911xx_ssp_version_validation, apicrypt] | 2K   | 1G   |
+| [ssp, recodings]                            | 262  | 1G   |
+| [ssp, HPV]                                  | 3K   | 1G   |
+
+
+```bash
+start | like server prot1strc1% | as path[3:5] set | sum set | where size \> 1e9 | order size | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|                   set                    | cnt  | size |
+|------------------------------------------|------|------|
+| [ssp, upload, files_1731959368_by_group] | 1M   | 444G |
+| [ssp, upload, files_1731959368]          | 322K | 145G |
+| [ssp, apicrypt, 201]                     | 72K  | 17G  |
+| [ssp, apicrypt, 338]                     | 52K  | 10G  |
+| [ssp, apicrypt, 338-SLM]                 | 22K  | 4G   |
+| [ssp, apicrypt, 664]                     | 7K   | 3G   |
+| [ssp, restitution, 523]                  | 9K   | 3G   |
+| [ssp, apicrypt, 923]                     | 12K  | 2G   |
+| [cupidon, upload, files_177041596]       | 7K   | 1G   |
+| [ssp, ORU]                               | 9K   | 1G   |
+| [ssp, HPV]                               | 3K   | 1G   |
+| [ssp, apicrypt, 338-kourou]              | 7K   | 998M |
+
+##### `ssp` By year since 2018
+
+```bash
+start | dir: prot1strc1 ssp | since: 2015-01-01 year | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|   start    | cnt  | size |
+|------------|------|------|
+| 2015-01-01 | 25K  | 13G  |
+| 2016-01-01 | 26K  | 12G  |
+| 2017-01-01 | 38K  | 19G  |
+| 2018-01-01 | 65K  | 26G  |
+| 2019-01-01 | 120K | 48G  |
+| 2020-01-01 | 138K | 55G  |
+| 2021-01-01 | 157K | 52G  |
+| 2022-01-01 | 163K | 66G  |
+| 2023-01-01 | 612K | 111G |
+| 2024-01-01 | 286K | 115G |
+| 2025-01-01 | 217K | 81G  |
+| 2026-01-01 | 223K | 37G  |
+
+##### `ssp` By month since 2025
+
+```bash
+start | dir: prot1strc1 ssp | since: 2025-01-01 month | merge-cte | ddb -json | fmt-auto
+```
+
+---
+
+|   start    | cnt | size |
+|------------|-----|------|
+| 2024-12-01 | 19  | 1M   |
+| 2025-01-01 | 18K | 6G   |
+| 2025-02-01 | 16K | 5G   |
+| 2025-03-01 | 16K | 5G   |
+| 2025-04-01 | 16K | 5G   |
+| 2025-05-01 | 15K | 5G   |
+| 2025-06-01 | 16K | 6G   |
+| 2025-07-01 | 16K | 6G   |
+| 2025-08-01 | 13K | 5G   |
+| 2025-09-01 | 20K | 7G   |
+| 2025-10-01 | 21K | 8G   |
+| 2025-11-01 | 26K | 10G  |
+| 2025-12-01 | 19K | 8G   |
+| 2026-01-01 | 25K | 8G   |
+| 2026-02-01 | 22K | 8G   |
+| 2026-03-01 | 41K | 9G   |
+| 2026-04-01 | 96K | 8G   |
+| 2026-05-01 | 37K | 1G   |
 
 <!--
 bin=$INFRA/infra-lib-2023/bin
