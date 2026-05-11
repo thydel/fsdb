@@ -51,6 +51,8 @@ echo '$table-of-contents$' > tmp/toc.md
             -   [By time span on a dir](#by-time-span-on-a-dir-1)
                 -   [`ssp` By year since 2015](#ssp-by-year-since-2015)
                 -   [`ssp` By month since 2025](#ssp-by-month-since-2025)
+-   [Fetch missing DB for local use](#fetch-missing-db-for-local-use)
+-   [Try CTE pipe](#try-cte-pipe)
 
 # Make it like home
 
@@ -706,6 +708,63 @@ start | dir: prot1strc1 ssp | since: 2025-01-01 month | merge-cte | ddb -json | 
 | 2026-03-01 | 41K | 9G   |
 | 2026-04-01 | 96K | 8G   |
 | 2026-05-01 | 37K | 1G   |
+
+# Fetch missing DB for local use
+
+```bash
+rsync -av --include='*.db' --exclude='*' controla2:usr/fsdb/tmp/ tmp/
+```
+
+# Try CTE pipe
+
+```bash
+load out/fsdb-cte.yml out/fsdb-pipes.yml
+```
+
+```bash
+site-growth | merge-cte | duckdb tmp/prot1strb1-data-nfsdata-small.db -json | fmt-auto
+```
+
+---
+
+|          date          |   site   |  cnt  | size | size_diff | size_rate |
+|------------------------|----------|-------|------|-----------|-----------|
+| 2025-05-01 02:00:00+02 | profntr1 | 16K   | 4G   | NULL      | NULL      |
+| 2025-06-01 02:00:00+02 | profntr1 | 25K   | 6G   | 1G        | 34.69%    |
+| 2025-07-01 02:00:00+02 | profntr1 | 30K   | 6G   | 170M      | 2.74%     |
+| 2025-08-01 02:00:00+02 | profntr1 | 25K   | 5G   | -1G       | -19.64%   |
+| 2025-09-01 02:00:00+02 | profntr1 | 33K   | 6G   | 1G        | 39.20%    |
+| 2025-10-01 02:00:00+02 | profntr1 | 35K   | 7G   | 29M       | 0.42%     |
+| 2025-11-01 01:00:00+01 | profntr1 | 27K   | 6G   | -1005M    | -14.00%   |
+| 2025-12-01 01:00:00+01 | profntr1 | 29K   | 7G   | 1G        | 19.42%    |
+| 2026-01-01 01:00:00+01 | profntr1 | 32K   | 6G   | -481M     | -6.52%    |
+| 2026-02-01 01:00:00+01 | profntr1 | 33K   | 6G   | 102M      | 1.49%     |
+| 2026-03-01 01:00:00+01 | profntr1 | 1005K | 129G | 122G      | 1794.85%  |
+| 2026-04-01 02:00:00+02 | profntr1 | 40K   | 7G   | -121G     | -93.93%   |
+| 2026-05-01 02:00:00+02 | profntr1 | 8K    | 1G   | -6G       | -80.22%   |
+
+```bash
+site-growth | merge-cte | duckdb tmp/prot1strc1-data-nfsdata-small.db -json | fmt-auto
+```
+
+---
+
+|          date          |   site   | cnt | size | size_diff | size_rate |
+|------------------------|----------|-----|------|-----------|-----------|
+| 2025-05-01 02:00:00+02 | profnte1 | 11K | 3G   | NULL      | NULL      |
+| 2025-06-01 02:00:00+02 | profnte1 | 16K | 6G   | 2G        | 59.74%    |
+| 2025-07-01 02:00:00+02 | profnte1 | 16K | 6G   | -82M      | -1.27%    |
+| 2025-08-01 02:00:00+02 | profnte1 | 13K | 5G   | -397M     | -6.23%    |
+| 2025-09-01 02:00:00+02 | profnte1 | 20K | 7G   | 1G        | 32.18%    |
+| 2025-10-01 02:00:00+02 | profnte1 | 21K | 8G   | 281M      | 3.55%     |
+| 2025-11-01 01:00:00+01 | profnte1 | 26K | 10G  | 2G        | 33.67%    |
+| 2025-12-01 01:00:00+01 | profnte1 | 19K | 8G   | -2G       | -23.84%   |
+| 2026-01-01 01:00:00+01 | profnte1 | 25K | 8G   | 689M      | 8.25%     |
+| 2026-02-01 01:00:00+01 | profnte1 | 22K | 8G   | -761M     | -8.43%    |
+| 2026-03-01 01:00:00+01 | profnte1 | 41K | 9G   | 1G        | 20.61%    |
+| 2026-04-01 02:00:00+02 | profnte1 | 96K | 8G   | -786M     | -7.88%    |
+| 2026-05-01 02:00:00+02 | profnte1 | 37K | 1G   | -7G       | -80.90%   |
+
 
 <!--
 bin=$INFRA/infra-lib-2023/bin
