@@ -1,0 +1,13 @@
+- { id: null, ns: fsdb }
+
+- id: plot
+  class: meta
+  sql: |-
+    SELECT \($_a.ts) AS date, \($col) AS \($col) FROM {prev}
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local col=${opts[c]:-${args[0]:-size}}
+    local type=${opts[t]:-${args[1]:-bar}}
+    local db=${opts[d]:-${args[2]:-tmp/nfsdata-small.db}}
+    
+    sql --arg col "$col" | merge-cte | duckdb "$db" -csv | youplot "$type" -d, -H

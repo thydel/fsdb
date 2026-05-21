@@ -25,7 +25,7 @@ bash-based exploration pipelines, informed by experimental POCs in the
 
 - [X] Use `baj-expert` skill to build [baj.md][]
 - [X] Use `journal-reader` skill to build [journals.md][]
-- [ ] See CTE
+- [X] See CTE
 
 ## Steps
 
