@@ -1,13 +1,49 @@
 - { id: null, ns: fsdb }
 
-- id: plot
+- id: plot-yp
   class: meta
   sql: |-
-    SELECT \($_a.ts) AS date, \($col) AS \($col) FROM {prev}
+    SELECT \($_a.ts) AS date, \($col) AS \($col) FROM {prev} ORDER BY \($_a.ts) ASC
   sh: |-
     local -A opts; local args cont; parsarg "$@"
     local col=${opts[c]:-${args[0]:-size}}
     local type=${opts[t]:-${args[1]:-bar}}
     local db=${opts[d]:-${args[2]:-tmp/nfsdata-small.db}}
-    
     sql --arg col "$col" | merge-cte | duckdb "$db" -csv | youplot "$type" -d, -H
+
+- id: plot-ddb
+  class: meta
+  sql: |-
+    SELECT \($_a.ts) AS date,
+      repeat('█', ((\($col) * 30) / nullif(MAX(\($col)) OVER (), 0))::int) AS bar,
+      \($col) AS \($col)
+    FROM {prev} ORDER BY \($_a.ts) ASC
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local col=${opts[c]:-${args[0]:-size}}
+    local db=${opts[d]:-${args[1]:-tmp/nfsdata-small.db}}
+    sql --arg col "$col" | merge-cte | duckdb "$db" -box
+
+- id: plot-gnu
+  class: meta
+  sql: |-
+    SELECT strftime(\($_a.ts), '%Y-%m-%d %H:%M:%S') AS date, \($col) AS \($col)
+    FROM {prev} ORDER BY \($_a.ts) ASC
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local col=${opts[c]:-${args[0]:-size}}
+    local db=${opts[d]:-${args[1]:-tmp/nfsdata-small.db}}
+    local gnu_opts='set datafile separator ","; set xdata time; set timefmt "%Y-%m-%d %H:%M:%S"; set term dumb size 100 30; plot "-" using 1:2 with lines'
+    sql --arg col "$col" | merge-cte | duckdb "$db" -csv | gnuplot -e "$gnu_opts"
+
+- id: cumul
+  class: window
+  sql: |-
+    SELECT *,
+      SUM(size) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS ssize,
+      SUM(cnt) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS scnt
+    FROM {prev}
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local part=${opts[p]:-default}
+    sql --arg part "$part"
