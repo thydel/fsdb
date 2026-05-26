@@ -196,6 +196,18 @@
   sh: |-
     sql --arg col ${1:?} --arg part "${2:-}"
 
+- id: cumul
+  class: window
+  sql: |-
+    SELECT *,
+      SUM(\($col)) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS s\($col)
+    FROM {prev}
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local col=${opts[c]:-${args[0]:-size}}
+    local part=${opts[p]:-default}
+    sql --arg col "$col" --arg part "$part"
+
 - id: order
   class: order_limit
   sql: |-

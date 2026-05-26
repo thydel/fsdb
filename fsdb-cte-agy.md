@@ -26,108 +26,57 @@ m4_define(PARSARG,«local -A opts; local args cont; parsarg "$«@»"»)
 ## id plot-yp
 
 -   Plot size or cnt using youplot (vertical terminal plot)
-
-``` yml
-class: meta
-```
-
-``` sql
-SELECT \($_a.ts) AS date, \($col) AS \($col) FROM {prev} ORDER BY \($_a.ts) ASC
-```
+-   Reads CSV from STDIN
 
 ``` bash
 PARSARG
-local col=${opts[c]:-${args[0]:-size}}
-local type=${opts[t]:-${args[1]:-bar}}
-local db=${opts[d]:-${args[2]:-DB}}
-sql --arg col "$col" | merge-cte | duckdb "$db" -csv | youplot "$type" -d, -H
+local type=${opts[t]:-${args[0]:-bar}}
+youplot "$type" -d, -H
 ```
 
 ### Example
 
 ``` bash
-start | span month | plot-yp -t line
+start | span month | sum date | merge-cte | ddb -csv | plot-yp -t line
 ```
 
 ## id plot-ddb
 
--   Vertical terminal ASCII bar chart generated purely inside DuckDB (zero
-    external dependencies)
-
-``` yml
-class: meta
-```
-
-``` sql
-SELECT \($_a.ts) AS date,
-  repeat('█', ((\($col) * 30) / nullif(MAX(\($col)) OVER (), 0))::int) AS bar,
-  \($col) AS \($col)
-FROM {prev} ORDER BY \($_a.ts) ASC
-```
+-   Vertical terminal ASCII bar chart (zero external dependencies)
+-   Reads JSON from STDIN
 
 ``` bash
 PARSARG
 local col=${opts[c]:-${args[0]:-size}}
-local db=${opts[d]:-${args[1]:-DB}}
-sql --arg col "$col" | merge-cte | duckdb "$db" -box
+local ts=${opts[t]:-${opts[ts]:-date}}
+jq -r --arg col "$col" --arg ts "$ts" '
+  . as $root | map(.[$col] // 0) | max as $max
+  | $root[] | (.[$col] // 0) as $val
+  | (($val * 30) / (if $max == 0 then 1 else $max end) | round) as $bars
+  | ([range($bars)] | map("█") | join("")) as $bar
+  | "\(.[$ts]) ┤\($bar) \($val)"
+'
 ```
 
 ### Example
 
 ``` bash
-start | span month | plot-ddb
+start | span month | sum date | merge-cte | ddb -json | plot-ddb size
 ```
 
 ## id plot-gnu
 
 -   Horizontal datetime line plot generated via gnuplot in text mode
-
-``` yml
-class: meta
-```
-
-``` sql
-SELECT strftime(\($_a.ts), '%Y-%m-%d %H:%M:%S') AS date, \($col) AS \($col)
-FROM {prev} ORDER BY \($_a.ts) ASC
-```
+-   Reads CSV from STDIN
 
 ``` bash
 PARSARG
-local col=${opts[c]:-${args[0]:-size}}
-local db=${opts[d]:-${args[1]:-DB}}
 local gnu_opts='set datafile separator ","; set xdata time; set timefmt "%Y-%m-%d %H:%M:%S"; set term dumb size 100 30; plot "-" using 1:2 with lines'
-sql --arg col "$col" | merge-cte | duckdb "$db" -csv | gnuplot -e "$gnu_opts"
+gnuplot -e "$gnu_opts"
 ```
 
 ### Example
 
 ``` bash
-start | span month | plot-gnu
-```
-
-## id cumul
-
--   Accumulate (running total) of size and count dynamically
-
-``` yml
-class: window
-```
-
-``` sql
-SELECT *,
-  SUM(size) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS ssize,
-  SUM(cnt) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS scnt
-FROM {prev}
-```
-
-``` bash
-PARSARG
-local part=${opts[p]:-default}
-sql --arg part "$part"
-```
-
-### Example
-
-``` bash
-start | cumul | order date asc
+start | span month | sum date | merge-cte | ddb -csv | plot-gnu
 ```
