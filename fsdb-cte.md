@@ -156,6 +156,12 @@ self -n \
 - Assembles a channel array into final SQL
 - Extracts `.q` from each element, chains as WITH ... CTE
 
+This operator compiles the JSON pipeline array `{ a: ARGS, q: SQL }`
+into a standard SQL WITH CTE expression. It translates each pipeline
+step `i` into a CTE alias `step<i> AS (...)`, replacing the
+placeholder `{prev}` with `step<i-1>` to chain the queries together
+sequentially. The final query selects everything from the last step.
+
 ```jq
 def cte($i; $cte): "step\($i) AS (\($cte))" | sub("{prev}"; "step\($i - 1)"; "g");
 def ctes: [keys, .] | transpose | map(cte(first; last))[1:];
@@ -587,6 +593,13 @@ sql --args "$@"
 - `span 2 week` = 2 week bucket
 - Overrides via `--group=COL`, `--vals=COLS`
 
+The `span` operator aggregates data into bucketed time intervals
+(e.g. `1 hour`, `1 month`) using DuckDB's `time_bucket`. It
+dynamically selects which columns to group by (using `$group` or the
+active partition column `$_a.part`) and sums all the active value
+columns (defaulting to the list of columns in `$_a.vals`, typically
+`size` and `cnt`).
+
 ```yml
 class: aggregate
 ```
@@ -625,6 +638,12 @@ start | span 2 week | merge-cte | ddb -box
 - Calculate evolution of a column (diff and rate) vs previous time slot
 - Adds `_diff` and `_rate` columns
 - Uses `$_a.ts` for ORDER BY, `$_a.part` for PARTITION BY
+
+The `growth` operator calculates the period-over-period delta and
+percentage rate. It wraps the query in an outer SELECT to allow
+referencing the `prev` value calculated via the window function
+`LAG()` without duplicating it in calculations. If a partition column
+is active, it evaluates the growth separately within each partition.
 
 ```yml
 class: window
@@ -672,6 +691,33 @@ sql --arg col ${1:?} --arg part "${2:-}"
 
 ```bash
 start | last 6 month | span month | growth size | chain acc size size_diff | order date asc | merge-cte | ddb -box
+```
+
+## id cumul
+
+- Dynamic cumulative running total of size and count or a specified column
+
+```yml
+class: window
+```
+
+```sql
+SELECT *,
+  SUM(\($col)) OVER (\(if $part == "default" then (if $_a.part != "" then "PARTITION BY " + $_a.part else "" end) elif $part != "" and $part != "none" then "PARTITION BY " + $part else "" end) ORDER BY \($_a.ts)) AS s\($col)
+FROM {prev}
+```
+
+```bash
+PARSARG
+local col=${opts[c]:-${args[0]:-size}}
+local part=${opts[p]:-default}
+sql --arg col "$col" --arg part "$part"
+```
+
+### Example
+
+```bash
+start | span month | cumul size | order date asc
 ```
 
 # Order / Limit operators
