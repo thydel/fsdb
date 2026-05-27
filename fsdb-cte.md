@@ -234,6 +234,20 @@ start | is server profntr1 | sum path[1] | order size | merge-cte | ddb -box
 start | like path[1] %pf% | sum server,path[1] | order size | merge-cte | ddb -box
 ```
 
+## id regexp
+
+- REGEXP DDB extension filter
+
+```bash
+: ${2:?}; where $1 '~' "'$2'"
+```
+
+### Example
+
+```bash
+start | regexp server prot1str[bc]1 | sum server,path | order size | merge-cte | ddb -box
+```
+
 ## id last
 
 - Filter rows relative to now (most recent N units)
@@ -633,7 +647,7 @@ start | span 2 week | merge-cte | ddb -box
 
 # Window operators
 
-## id growth
+## id growth_old
 
 - Calculate evolution of a column (diff and rate) vs previous time slot
 - Adds `_diff` and `_rate` columns
@@ -667,6 +681,46 @@ sql --arg col ${1:?} --arg part "${2:-}"
 
 ```bash
 start | last 6 month | span month | growth size | order date asc | merge-cte | ddb -box
+```
+
+## id growth
+
+- Calculate absolute and relative growth metrics for a column over a period relative to a pivot date
+- Outputs `<col>_start`, `<col>_growth`, `<col>_end`, and `<col>_rate`
+
+The `growth` operator partitions the aggregate sum of a column before
+and after a pivot date. It calculates the starting baseline size, the
+absolute growth during the period, the final size, and the relative
+growth rate (speed). This runs in a single aggregation pass and avoids
+window functions.
+
+```yml
+class: aggregate
+```
+
+```sql
+SELECT
+  \($group),
+  SUM(CASE WHEN \($_a.ts) < TIMESTAMP '\($start)' THEN \($col) ELSE 0 END) AS \($col)_start,
+  SUM(CASE WHEN \($_a.ts) >= TIMESTAMP '\($start)' THEN \($col) ELSE 0 END) AS \($col)_growth,
+  \($col)_start + \($col)_growth AS \($col)_end,
+  round(\($col)_growth::DOUBLE / nullif(\($col)_start, 0), 4) AS \($col)_rate
+FROM {prev}
+GROUP BY \($group)
+```
+
+```bash
+PARSARG
+local start=${args[0]:?}
+local col=${opts[c]:-${args[1]:-size}}
+local group=${opts[g]:-${opts[group]:-path}}
+sql --arg start "$start" --arg col "$col" --arg group "$group"
+```
+
+### Example
+
+```bash
+start | growth '2025-01-01' | order size_end desc | items 10 | order size_growth desc
 ```
 
 ## id acc
