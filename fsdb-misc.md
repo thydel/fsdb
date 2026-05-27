@@ -61,7 +61,6 @@ SQL --arg count ${1:-server}
 ```sh
 full-db-basic-facts | duckdb tmp/ssp.db -box
 full-db-basic-facts path[0:4] | duckdb tmp/prot1strb1-data-nfsdata.db -box
-
 full-db-basic-facts path[0:4] | duckdb tmp/prot1strc1-data-nfsdata.db -box
 ```
 
