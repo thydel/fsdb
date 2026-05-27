@@ -13,15 +13,15 @@
     SELECT
       STRFTIME(min(uts), '%Y-%m-%d') AS start,
       STRFTIME(max(uts), '%Y-%m-%d') AS end,
-      count(DISTINCT server) AS servers,
+      count(DISTINCT \($count)) AS '\($count)',
       format_bytes(count(*)::BIGINT) AS files,
       format_bytes(sum(size)::BIGINT) AS size
     FROM fsdb;
-    
   sh: |-
-    jq -nr "\"$sql\"" ""
+    jq -nr "\"$sql\"" "" --arg count ${1:-server}
   tt: |-
     full-db-basic-facts | duckdb tmp/ssp.db --box
+    full-db-basic-facts path[0:4] | duckdb tmp/prot1strb1-data-nfsdata.db
 
 - id: small-db-basic-facts
   sql: |-
@@ -29,15 +29,16 @@
       STRFTIME(min(date), '%Y-%m-%d') AS start,
       STRFTIME(max(date), '%Y-%m-%d') AS end,
       format_bytes(count(*)::BIGINT) AS rows,
-      count(DISTINCT server) AS servers,
+      count(DISTINCT \($count)) AS '\($count)',
       format_bytes(count(DISTINCT path)) AS dirs,
       format_bytes(sum(cnt)::BIGINT) AS files,
       format_bytes(sum(size)::BIGINT) AS size
     FROM fsdb;
   sh: |-
-    jq -nr "\"$sql\"" ""
+    jq -nr "\"$sql\"" "" --arg count ${1:-server}
   tt: |-
     small-db-basic-facts | duckdb out/ssp-small.db --box
+    full-db-basic-facts path | duckdb tmp/prot1strb1-data-nfsdata-small.db
 
 - id: query-stat
   sql: |-
