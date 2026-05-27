@@ -46,6 +46,10 @@
   sh: |-
     : ${2:?}; where $1 like "'$2'"
 
+- id: regexp
+  sh: |-
+    : ${2:?}; where $1 '~' "'$2'"
+
 - id: last
   class: filter
   sql: |-
@@ -176,7 +180,7 @@
     sql --argjson n "$n" --arg bucket "$bucket" \
       --arg group "${opts[group]:-}" --arg sum "${opts[vals]:-}"
 
-- id: growth
+- id: growth_old
   class: window
   sql: |-
     SELECT *,
@@ -188,6 +192,24 @@
     )
   sh: |-
     sql --arg col ${1:?} --arg part "${2:-}"
+
+- id: growth
+  class: aggregate
+  sql: |-
+    SELECT
+      \($group),
+      SUM(CASE WHEN \($_a.ts) < TIMESTAMP '\($start)' THEN \($col) ELSE 0 END) AS \($col)_start,
+      SUM(CASE WHEN \($_a.ts) >= TIMESTAMP '\($start)' THEN \($col) ELSE 0 END) AS \($col)_growth,
+      \($col)_start + \($col)_growth AS \($col)_end,
+      round(\($col)_growth::DOUBLE / nullif(\($col)_start, 0), 4) AS \($col)_rate
+    FROM {prev}
+    GROUP BY \($group)
+  sh: |-
+    local -A opts; local args cont; parsarg "$@"
+    local start=${args[0]:?}
+    local col=${opts[c]:-${args[1]:-size}}
+    local group=${opts[g]:-${opts[group]:-path}}
+    sql --arg start "$start" --arg col "$col" --arg group "$group"
 
 - id: acc
   class: window

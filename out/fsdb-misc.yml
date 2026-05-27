@@ -20,8 +20,9 @@
   sh: |-
     jq -nr "\"$sql\"" "" --arg count ${1:-server}
   tt: |-
-    full-db-basic-facts | duckdb tmp/ssp.db --box
-    full-db-basic-facts path[0:4] | duckdb tmp/prot1strb1-data-nfsdata.db
+    full-db-basic-facts | duckdb tmp/ssp.db -box
+    full-db-basic-facts path[0:4] | duckdb tmp/prot1strb1-data-nfsdata.db -box
+    full-db-basic-facts path[0:4] | duckdb tmp/prot1strc1-data-nfsdata.db -box
 
 - id: small-db-basic-facts
   sql: |-
@@ -37,8 +38,9 @@
   sh: |-
     jq -nr "\"$sql\"" "" --arg count ${1:-server}
   tt: |-
-    small-db-basic-facts | duckdb out/ssp-small.db --box
-    full-db-basic-facts path | duckdb tmp/prot1strb1-data-nfsdata-small.db
+    small-db-basic-facts | duckdb out/ssp-small.db -box
+    small-db-basic-facts path[1:4] | duckdb tmp/prot1strb1-data-nfsdata-small.db -box
+    small-db-basic-facts path[1:4] | duckdb tmp/prot1strc1-data-nfsdata-small.db -box
 
 - id: query-stat
   sql: |-
