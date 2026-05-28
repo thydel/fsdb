@@ -33,6 +33,12 @@
   sh: |-
     < out/conf-by-name.json jq -r --arg var ${1:?} 'getpath($var / ".")'
 
+- id: mk-files-stat
+  sh: |-
+    : ${2:?}; for i in imn Ysi; do (cd $1; files-stat $2 $i) | gzip > tmp/$2-$i-stat.js.gz; done
+  tt: |-
+    mk-files-stat spl cpython-v3.14.5
+
 - id: get-files-stat
   sh: |-
     : ${1:?}; local a=${2:-Ysi}; with-lib fsdb -- files-stat $(var $1.dir) $a |
