@@ -37,6 +37,7 @@ m4_define(DB,tmp/nfsdata-small.db)
 # id stat-args
 
 - Generate json version of `stat(1)` args
+- The json map was used in previous version to build object instead of array
 
 ```json
 { "Y": uts, s: size, f: mode, h: nlinks, u: uid, g: gid, U: uname, G: gname }
@@ -66,8 +67,16 @@ next unless @s;
 print $j->encode([$s[1], $s[2], $_]), "\n"
 ```
 
-- But still use it for everythin except path
+- But still use it for everything except path as string and mode as
+  decimal number (because there is no jex in `json`)
 - Use inode as join key
+- Note the confusing point that
+  - `files-stat $dir imn` use `perl` to output `[ inode, decimal mode, path ]`
+  - `files-stat $dir im` use `xargs stat` to output `[ inode, mount point ]`
+- This sould be rewrite as simpler/better tool, but that require a
+  rewrite of the downstream funcs too
+- That could be a `stat` like tool able to output correct `json` array
+  sequence with an optional first array for DB col names
 
 ```bash
 (cd ${1:?} && find -type f -print0 |
@@ -100,6 +109,21 @@ m4_define(SQL,jq -nr "\"$sql\"" "$«@»")
 
 ```bash
 < out/conf-by-name.json jq -r --arg var ${1:?} 'getpath($var / ".")'
+```
+
+# id mk-files-stat
+
+- The original `get-files-stat` (infra) was made to collect stat via `ssh`
+- The downstream tools currently expect the rigid
+  `tmp/$set-{imn,Ysi}.js.gz` pair
+- This one add a local version to allow making test DB
+
+```bash
+: ${2:?}; for i in imn Ysi; do (cd $1; files-stat $2 $i) | gzip > tmp/$2-$i-stat.js.gz; done
+```
+
+```sh
+mk-files-stat spl cpython-v3.14.5
 ```
 
 # id get-files-stat
